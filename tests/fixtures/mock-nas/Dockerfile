@@ -10,7 +10,7 @@ FROM alpine:3
 # baked into the image.
 ARG NAS_TEST_PASSWORD
 
-RUN apk add --no-cache openssh-server bash coreutils sudo \
+RUN apk add --no-cache openssh-server bash coreutils sudo shadow \
     && ssh-keygen -A \
     && adduser -D -s /bin/bash nas-test \
     && [ -n "$NAS_TEST_PASSWORD" ] || (echo "Build requires --build-arg NAS_TEST_PASSWORD" >&2; exit 1) \
@@ -26,7 +26,8 @@ RUN chmod +x /usr/local/bin/setup-stubs.sh && /usr/local/bin/setup-stubs.sh
 
 RUN sed -i 's/^#Port 22/Port 2222/' /etc/ssh/sshd_config \
     && sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config \
-    && sed -i 's/^#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+    && sed -i 's/^#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
+    && printf '\n# Test-fixture tweaks: run-all.sh fires multiple ssh-copy-id calls in\n# rapid succession (one per test). ssh-copy-id always does a probe\n# pubkey-auth that fails before falling back to password auth, which\n# OpenSSH 9.8+ counts as "failed auth" and triggers PerSourcePenalties\n# (default on). After ~5 tests the source IP is penalised for 17s+ and\n# subsequent tests time out. Disable the penalty system in the mock —\n# real Synology NAS is not affected.\nPerSourcePenalties no\nMaxStartups 100:30:200\nMaxSessions 100\nMaxAuthTries 10\n' >> /etc/ssh/sshd_config
 
 RUN cat > /entrypoint.sh <<'ENTRYPOINT_EOF'
 #!/bin/bash
