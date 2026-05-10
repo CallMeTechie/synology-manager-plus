@@ -176,27 +176,34 @@ allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
    - Wenn `context/nas-profile.md` existiert und Host/Port/User enthält → diese Werte verwenden.
    - Sonst via `AskUserQuestion` nacheinander abfragen: Host (LAN-IP oder Domain), Port (Default 22), Username.
 
-2. **Keypair sicherstellen:**
-   - Prüfen ob `~/.ssh/id_ed25519` existiert.
-   - Falls nicht: `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "claude-code@$(hostname)"`.
-   - Existierende Keys werden niemals überschrieben.
+2. **Keypair sicherstellen (plugin-eigener Pfad):**
+   - Plugin nutzt einen dedizierten Key: `~/.ssh/synology-manager-plus_ed25519`. Damit kollidiert es nie mit User-Keys (z. B. GitHub-Schlüsseln mit Passphrase) und Key-Rotation kann separat erfolgen.
+   - Prüfen ob `~/.ssh/synology-manager-plus_ed25519` existiert.
+   - Falls nicht: `ssh-keygen -t ed25519 -N "" -f ~/.ssh/synology-manager-plus_ed25519 -C "synology-manager-plus@$(hostname)"`.
+   - Alle SSH-Aufrufe des Plugins setzen explizit `-i ~/.ssh/synology-manager-plus_ed25519`.
+   - Existierende Plugin-Keys werden niemals überschrieben.
 
 3. **Key-Auth testen:**
-   - `ssh -o BatchMode=yes -o ConnectTimeout=5 -p <port> <user>@<host> "echo OK"`.
+   - `ssh -i ~/.ssh/synology-manager-plus_ed25519 -o BatchMode=yes -o ConnectTimeout=<timeout> -p <port> <user>@<host> "echo OK"`.
+   - Default `<timeout>` = 10 Sekunden, konfigurierbar via Feld `connect_timeout_seconds` in `nas-profile.md` (Range 3–60). 10s ist Default, weil 5s bei WAN/VPN-Setups (wie WireGuard-Tunnel) zu kurz ist.
    - Bei Erfolg → Schritt 5.
    - Bei Fehlschlag → Schritt 4.
 
-4. **Deployment-Anleitung anzeigen:**
-   - Dem Anwender den exakten Befehl präsentieren:
-     ```
-     ! ssh-copy-id -p <port> -i ~/.ssh/id_ed25519.pub <user>@<host>
-     ```
-   - Erklären, dass der `!`-Prefix den Befehl im Claude-Code-Prompt ausführt und das NAS-Passwort interaktiv abgefragt wird.
-   - Warten, bis der Anwender bestätigt, dass `ssh-copy-id` durchgelaufen ist (per `AskUserQuestion`).
+4. **Deployment-Anleitung anzeigen (kopierbarer Text, kein Aufruf):**
+   - **Anti-Pattern-Regel (ZWINGEND):** Das Plugin darf `ssh-copy-id` NIEMALS selbst per Bash-Tool aufrufen. Verifiziert: `ssh-copy-id` ohne TTY hängt deterministisch bis SIGTERM. Nur der `!`-Prefix im interaktiven Claude-Code-Prompt allokiert ein PTY und erlaubt die Passwort-Eingabe. Code-Reviewer müssen diese Regel bei jedem Touch von `setup-ssh.md` und `first-run.md` prüfen.
+   - Dem Anwender den exakten Befehl als reinen Text präsentieren — nicht in einem ausführbaren Bash-Snippet:
+
+     > **Bitte tippe den folgenden Befehl WÖRTLICH inklusive Ausrufezeichen am Anfang:**
+     >
+     > `! ssh-copy-id -p <port> -i ~/.ssh/synology-manager-plus_ed25519.pub <user>@<host>`
+     >
+     > Das `!` am Anfang ist ein Claude-Code-Prefix und essenziell — er allokiert ein interaktives Terminal, in dem das NAS-Passwort eingegeben werden kann. Ohne das `!` versucht Claude den Befehl normal auszuführen, was deterministisch hängt.
+
+   - Warten, bis der Anwender per `AskUserQuestion` bestätigt: "ssh-copy-id durchgelaufen, weiter mit Verifikation?" — KEINE automatische Re-Verifikation, keine Polling-Schleife.
 
 5. **Re-Verifikation:**
-   - Erneuter `BatchMode=yes`-Test.
-   - Bei Erfolg: `nas-profile.md` mit Host/Port/User updaten und Key-Pfad eintragen.
+   - Erneuter `BatchMode=yes`-Test mit `-i ~/.ssh/synology-manager-plus_ed25519` und `ConnectTimeout` aus `nas-profile.md` (Default 10s).
+   - Bei Erfolg: `nas-profile.md` mit Host, Port, User, Key-Pfad und `connect_timeout_seconds` eintragen.
    - Bei Fehlschlag: klare Fehlermeldung mit den drei häufigsten Ursachen (SSH nicht enabled in DSM, falscher Port, User existiert nicht) und Aufforderung, `/setup-ssh` erneut zu starten.
 
 **Nichts wird zerstörerisch verändert:** vorhandene Keys bleiben unangetastet, `~/.ssh/authorized_keys` auf dem NAS wird nur per `ssh-copy-id` ergänzt (das ist non-destructive by default).
@@ -247,7 +254,19 @@ allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
    - `context/mounts/current.txt` mit aktuellem `mount`-Output (gefiltert auf Host).
 7. **Abschluss-Summary** mit Empfehlung, als Nächstes `/diag` zu laufen.
 
-**Idempotenz:** Bei Re-Run prüft `/first-run` zuerst, ob `nas-profile.md` schon befüllt ist. Falls ja, fragt es per `AskUserQuestion`: "Profile existiert. Überschreiben mit frischer Discovery, oder abbrechen?" Bei Bestätigung wird `nas-profile.md` und die `CLAUDE.md`-Quick-Reference komplett neu geschrieben (saubere Daten). `volumes/` und `mounts/` werden nie gelöscht, nur ergänzt — die History bleibt.
+**Idempotenz und Schutz von User-Notizen:** Bei Re-Run prüft `/first-run` zuerst, ob `nas-profile.md` schon befüllt ist. Falls ja, fragt es per `AskUserQuestion`: "Profile existiert. Überschreiben mit frischer Discovery, oder abbrechen?" Bei Bestätigung werden ausschließlich die plugin-verwalteten Bereiche neu geschrieben.
+
+`CLAUDE.md` enthält zwei Marker, die den Plugin-Bereich abgrenzen:
+
+```markdown
+<!-- synology-manager-plus:managed-start -->
+[Quick-Reference-Tabelle und Scoped-Operations werden hier vom Plugin geschrieben]
+<!-- synology-manager-plus:managed-end -->
+
+[Alles unter diesem Marker bleibt unangetastet — User-Notizen, eigene Sektionen, "Notes"-Bereich]
+```
+
+Beim Re-Run wird ausschließlich der Bereich zwischen den Markern ersetzt. Fehlen die Marker (z. B. bei Migration vom Original-Plugin oder bei manuellem Editieren der Datei), präsentiert `/first-run` einen Diff der geplanten Änderungen und fragt explizit um Erlaubnis vor dem Schreiben — kein Silent-Overwrite. `nas-profile.md` wird ohne Diff überschrieben, weil sie reines Plugin-Eigentum ist und keine User-Notizen enthält. `volumes/` und `mounts/` werden nie gelöscht, nur ergänzt — die History bleibt.
 
 ### 4.3 `/diag` (NEU)
 
@@ -269,7 +288,7 @@ allowed-tools: Bash, Read
 | 1 | `nas-profile.md` existiert | `[ -f context/nas-profile.md ]` | "Lauf zuerst `/first-run`" |
 | 2 | Profile enthält Host/Port/User | grep auf Profile | "Profile unvollständig — `/first-run` neu" |
 | 3 | SSH erreichbar | `nc -z -w3 <host> <port>` | "Host/Port prüfen, NAS evtl. aus" |
-| 4 | Key-Auth funktioniert | `ssh -o BatchMode=yes -o ConnectTimeout=5 ... "echo ok"` | "Lauf `/setup-ssh`" |
+| 4 | Key-Auth funktioniert | `ssh -i ~/.ssh/synology-manager-plus_ed25519 -o BatchMode=yes -o ConnectTimeout=10 ... "echo ok"`, zwei Versuche (cold + warm, um VPN-Aufwach-Latenz zu absorbieren) | "Lauf `/setup-ssh`" |
 | 5 | Sudo verfügbar (best-effort) | `ssh ... "sudo -n true 2>/dev/null"` | Info: "kein passwortloses Sudo — manche Ops erfordern manuelle Eingabe" |
 | 6 | `df -h` funktioniert | über SSH | "SSH ok, aber NAS antwortet komisch" |
 | 7 | Lokale Mounts gesund | `mount \| grep <host>` und für jeden Mount `stat` | "Mount $X tot — `umount` und neu mounten" |
@@ -298,7 +317,8 @@ Exit nach Output. Kein Schreiben in Context-Dateien.
 
 - Logik bleibt identisch zu v0.1.0.
 - Header in jedem Command bekommt einen Pre-Check: "Wenn `nas-profile.md` fehlt, starte mit `/first-run`."
-- SSH-Aufrufe bekommen einheitlich `-o ConnectTimeout=5` (Original hatte das inkonsistent).
+- SSH-Aufrufe bekommen einheitlich `-o ConnectTimeout=$CONNECT_TIMEOUT` mit Default 10s, konfigurierbar via `connect_timeout_seconds` in `nas-profile.md` (Original hatte hartes 5s — zu kurz für WAN/VPN).
+- Alle SSH-Aufrufe nutzen den plugin-eigenen Key: `-i ~/.ssh/synology-manager-plus_ed25519`.
 - Alle SSH-Aufrufe respektieren den konfigurierten Port aus `nas-profile.md` (Original ging implizit von Port 22 aus — bricht bei nicht-Standard-Port wie 2022).
 
 ## 5. README, CHANGELOG, Migration
@@ -367,7 +387,20 @@ Alle laufen bei jedem Push/PR über `.github/workflows/validate.yml`.
 - `allowed-tools` darf nur dokumentierte Tools enthalten (`Bash, Read, Write, Edit, AskUserQuestion, Task`).
 - `description` muss zwischen 20 und 200 Zeichen lang sein.
 
-### 6.2 Integration-Tests (`tests/integration/`) gegen Mock-NAS
+### 6.2 Bash-Smoke-Tests (`tests/integration/`) gegen Mock-SSH-Endpoint
+
+> **Was diese Tests beweisen — und was NICHT:**
+>
+> Diese Tests führen die Bash-Snippets aus den Command-Markdown-Dateien gegen einen Alpine+OpenSSH-Container aus. Sie validieren:
+> - SSH-Aufrufe haben korrekte Syntax und Flags.
+> - Eingabe-Validierung (Host/Port/User-Regex) funktioniert.
+> - File-I/O auf `nas-profile.md`, `volumes/`, `mounts/`, `storage-report.md` ist syntaktisch korrekt.
+>
+> Sie validieren **nicht**:
+> - Synology-spezifisches Verhalten — DSM ist BusyBox+Custom-Tools mit eigenen Pfaden, anderen Flag-Sets, BTRFS-Quirks. Ein Alpine-Container ist KEIN DSM. Bugs, die sich nur auf echtem DSM zeigen, werden hier grün.
+> - Den Slash-Command-Workflow als Ganzes — `AskUserQuestion`-Calls, Multi-Turn-Logik und Tool-Orchestrierung erfordern einen LLM-Agenten und können nicht in Bash simuliert werden. Bugs in der Workflow-Logik (Bedingungen, State-Übergänge, AskUserQuestion-Antwort-Verarbeitung) werden hier grün.
+>
+> Daher: grüne CI ist Voraussetzung für Release, aber nicht hinreichend. Die manuelle Akzeptanz-Checkliste in §6.4 ist gleichwertiger Test-Layer.
 
 Laufen über `.github/workflows/integration.yml` in einem Job, der einen Mock-NAS-Container startet.
 
@@ -490,11 +523,31 @@ jobs:
 
 ### 6.4 Akzeptanzkriterien
 
-Phase 1 gilt als abgeschlossen, wenn:
+Phase 1 gilt als abgeschlossen, wenn **alle drei** Layer grün sind:
 
+**Layer 1 — Statische Checks (CI, automatisiert):**
 - `validate.yml` ist grün auf main.
+
+**Layer 2 — Bash-Smoke-Tests (CI, automatisiert):**
 - `integration.yml` ist grün auf main.
-- Manueller End-to-End-Test gegen die echte DS218+ läuft `/first-run` durch und `/diag` ist 7/7 grün.
+
+**Layer 3 — Manuelle Akzeptanz-Checkliste auf echter Synology (PFLICHT für jedes Release):**
+
+Diese Checkliste fängt das, was Layer 1+2 strukturell nicht fangen können (Synology-Verhalten + Workflow-Logik). Wird gegen die DS218+-Referenzhardware oder vergleichbare DSM-7-Hardware durchgeführt und im Release-PR als ausgefüllte Checkbox-Liste verlinkt:
+
+- [ ] **Cold-Start auf frischem System:** Plugin auf neuem Claude-Code-Host installiert (`marketplace add` + `install`), `nas-profile.md` ist initial leer.
+- [ ] **`/first-run` Erstdurchlauf:** Wizard fragt Host/Port/User korrekt ab via `AskUserQuestion`, `/setup-ssh`-Logik wird intern korrekt aufgerufen, `! ssh-copy-id`-Anleitung wird angezeigt.
+- [ ] **`! ssh-copy-id` von Hand getippt:** Befehl läuft im Claude-Code-Prompt mit interaktiver Passwort-Eingabe durch, Key wird auf NAS deployt.
+- [ ] **NAS-Discovery liefert echte Werte:** DSM-Version aus `/etc/VERSION`, Modell aus `/etc/synoinfo.conf`, Volumes aus `df -h` — alle korrekt extrahiert.
+- [ ] **CLAUDE.md korrekt populiert:** Quick-Reference innerhalb der Marker, Bereich unterhalb der Marker bleibt unangetastet (Test: vorab eine "Test-Notiz" unter den End-Marker schreiben, nach `/first-run` prüfen ob sie noch da ist).
+- [ ] **`/diag` zeigt 7/7 grün** direkt nach erfolgreichem `/first-run`.
+- [ ] **`/diag` Negativ-Test:** Mit ausgeschaltetem NAS oder falschem Port → klare Fehlermeldungen, keine Hänger.
+- [ ] **`/list-shares` zeigt echte Shares** mit korrekten Permissions.
+- [ ] **`/nas-status` aktualisiert `storage-report.md`** mit echten `df`-Werten und Timestamp.
+- [ ] **`/manage-mounts list`** läuft sauber, auch ohne aktive Mounts.
+- [ ] **Re-Run-Test `/first-run`:** Confirm-Prompt erscheint, bestehende User-Notizen unterhalb des End-Markers überleben.
+- [ ] **WAN/VPN-Test:** Mindestens ein erfolgreicher Lauf über die WAN-Adresse (z. B. `ssh.domaincaster.com:2022`) — bestätigt, dass 10s-Timeout für tunneled Verbindungen reicht.
+- [ ] **Anti-Pattern-Verifikation:** Source-Review von `setup-ssh.md` und `first-run.md` bestätigt, dass `ssh-copy-id` nirgends in einem ausführbaren Bash-Block steht (nur als Anleitungs-String).
 
 ## 7. Sicherheits-Überlegungen
 
