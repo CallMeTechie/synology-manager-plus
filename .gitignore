@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+tests/integration/logs/
+tests/integration/.tmp-home-*
+*.log
+
+# Local plugin cache (when developing against local marketplace)
+.claude-plugin-cache/
