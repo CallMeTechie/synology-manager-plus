@@ -6,16 +6,16 @@ A Claude Code plugin for managing a Synology NAS via SSH.
 
 ## What's different from the original
 
-| Area | Original v0.1.0 | This fork v0.2.0 |
-|------|-----------------|------------------|
-| Installation | `claude plugin install danielrosehill/...` did not work — no marketplace manifest in repo | Marketplace manifest included; `claude plugin marketplace add` works directly |
-| `/first-run` | Sub-agent that could not maintain a multi-turn dialog | Slash command in main context using `AskUserQuestion` |
-| SSH setup | Manual: keygen, copy-id, profile editing | Guided `/setup-ssh` with copy-paste `!`-prefix flow |
-| Health check | Absent | `/diag` 7-point health check |
-| SSH key | Used `~/.ssh/id_ed25519`, conflicted with user keys | Plugin-owned `~/.ssh/synology-manager-plus_ed25519` |
-| Connect timeout | Hard-coded 5s, broke on WAN/VPN | Default 10s, configurable per-profile |
-| User notes in CLAUDE.md | Could be overwritten by `/first-run` re-run | Protected via managed-section markers |
-| Tests | None | Static checks + Mock-NAS smoke tests in CI |
+|Area|Original v0.1.0|This fork v0.2.0|
+|---|---|---|
+|Installation|`claude plugin install danielrosehill/...` did not work — no marketplace manifest in repo|Marketplace manifest included; `claude plugin marketplace add` works directly|
+|`/first-run`|Sub-agent that could not maintain a multi-turn dialog|Slash command in main context using `AskUserQuestion`|
+|SSH setup|Manual: keygen, copy-id, profile editing|Guided `/setup-ssh` with copy-paste `!`-prefix flow|
+|Health check|Absent|`/diag` 7-point health check|
+|SSH key|Used `~/.ssh/id_ed25519`, conflicted with user keys|Plugin-owned `~/.ssh/synology-manager-plus_ed25519`|
+|Connect timeout|Hard-coded 5s, broke on WAN/VPN|Default 10s, configurable per-profile|
+|User notes in CLAUDE.md|Could be overwritten by `/first-run` re-run|Protected via managed-section markers|
+|Tests|None|Static checks + Mock-NAS smoke tests in CI|
 
 ## Installation
 
@@ -32,14 +32,14 @@ claude plugin install synology-manager-plus@synology-manager-plus
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/first-run` | Interactive setup wizard (one-time, idempotent) |
-| `/setup-ssh` | Standalone SSH key setup |
-| `/diag` | 7-point health check (read-only) |
-| `/nas-status` | Disk usage, RAID, services, load |
-| `/list-shares` | List shared folders, refresh volume snapshots |
-| `/manage-mounts` | View/add/remove NFS or SMB mounts |
+|Command|Description|
+|---|---|
+|`/first-run`|Interactive setup wizard (one-time, idempotent)|
+|`/setup-ssh`|Standalone SSH key setup|
+|`/diag`|7-point health check (read-only)|
+|`/nas-status`|Disk usage, RAID, services, load|
+|`/list-shares`|List shared folders, refresh volume snapshots|
+|`/manage-mounts`|View/add/remove NFS or SMB mounts|
 
 ## Migration from `danielrosehill/synology-manager-plugin`
 
