@@ -373,7 +373,11 @@ Read `context/nas-profile.md` and extract values. Variable name `NAS_USER` (not 
 
 The placeholder check uses a positive grep against the template string (`_not configured_`) instead of fishing out word-3 ("`_not`") with awk. The grep approach survives template changes (e.g. switching to `<unset>`); the awk-word approach is fragile by accident.
 
+`set -euo pipefail` at the top is critical: without `-o pipefail`, a piped expression like `discover ... | tr -d '\r'` would swallow `discover()`'s `exit 1` and continue with empty output. Every command starts with this guard for the same reason.
+
 ```bash
+set -euo pipefail
+
 PROFILE="context/nas-profile.md"
 [ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first" >&2; exit 1; }
 
@@ -470,7 +474,38 @@ allowed-tools: Bash, Read, Write
 
 ## Profile extraction (do this first)
 
-Use the SAME extraction block as `/nas-status` (placeholder grep + extract + non-empty check + regex validation). When implementing, copy it literally — DRY here means the static `shellcheck-commands.sh` validates it once but every command file carries its own copy because Markdown commands cannot share helper code.
+Markdown commands cannot share helper code, and `shellcheck-commands.sh` only inspects fenced bash blocks. So this block must be duplicated literally — referencing it as prose would leave the validation logic out of CI and out of the LLM agent's reading frame.
+
+```bash
+set -euo pipefail
+
+PROFILE="context/nas-profile.md"
+[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first" >&2; exit 1; }
+
+for field in host port user; do
+  if grep -qE "^- ${field}: _not configured_" "$PROFILE"; then
+    echo "Profile not yet configured (field '${field}' is placeholder) — run /first-run" >&2
+    exit 1
+  fi
+done
+
+HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
+PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
+NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+
+for var in HOST PORT NAS_USER; do
+  if [ -z "${!var}" ]; then
+    echo "Profile field $var is empty or malformed in $PROFILE — re-run /first-run" >&2
+    exit 1
+  fi
+done
+
+[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host: $HOST" >&2; exit 1; }
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port: $PORT" >&2; exit 1; }
+[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user: $NAS_USER" >&2; exit 1; }
+```
 
 ## Query
 
@@ -527,7 +562,38 @@ allowed-tools: Bash, Read, Write, AskUserQuestion
 
 ## Profile extraction
 
-Use the SAME extraction block as `/nas-status` (placeholder-grep + extract + non-empty check + regex validation). For `/manage-mounts` only `HOST` and `NAS_USER` are strictly required — `PORT` and `CONNECT_TIMEOUT` are not used by this command, but extracting them anyway keeps the prelude identical and reduces drift between commands.
+Same prelude as `/nas-status` — duplicated literally so `shellcheck-commands.sh` actually inspects it. Only `HOST` and `NAS_USER` are strictly used by this command, but the full prelude prevents drift between commands.
+
+```bash
+set -euo pipefail
+
+PROFILE="context/nas-profile.md"
+[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first" >&2; exit 1; }
+
+for field in host port user; do
+  if grep -qE "^- ${field}: _not configured_" "$PROFILE"; then
+    echo "Profile not yet configured (field '${field}' is placeholder) — run /first-run" >&2
+    exit 1
+  fi
+done
+
+HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
+PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
+NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+
+for var in HOST PORT NAS_USER; do
+  if [ -z "${!var}" ]; then
+    echo "Profile field $var is empty or malformed in $PROFILE — re-run /first-run" >&2
+    exit 1
+  fi
+done
+
+[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host: $HOST" >&2; exit 1; }
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port: $PORT" >&2; exit 1; }
+[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user: $NAS_USER" >&2; exit 1; }
+```
 
 Dispatch by `$ARGUMENTS`:
 
@@ -756,9 +822,11 @@ Run the same logic as `/setup-ssh` steps 2–6 (plugin-owned key generation, Bat
 
 ### 5. Discover NAS hardware and software
 
-Build SSH as an array (so hostnames with hyphens or spaces never word-split):
+`set -euo pipefail` at the top is required — `discover()`'s `exit 1` is consumed by surrounding pipes (`| tr -d '\r'`) without `pipefail`, which would silently produce empty values:
 
 ```bash
+set -euo pipefail
+
 SSH=(
   ssh
   -i "$HOME/.ssh/synology-manager-plus_ed25519"
@@ -963,7 +1031,11 @@ Run a 7-point health check. No file writes, no state mutation.
 
 Use `NAS_USER`, NOT `$USER` — `$USER` is the local Linux login user.
 
+This command intentionally does NOT use `set -e` — every check must run to completion so the user sees the full picture. Failures inside individual checks are caught with `if`/`||` patterns and emit a labelled `FAIL`/`WARN` line:
+
 ```bash
+set -uo pipefail  # -e omitted on purpose; per-check error handling below
+
 PROFILE="context/nas-profile.md"
 HOST=""; PORT=""; NAS_USER=""; CONNECT_TIMEOUT=""
 
@@ -1025,6 +1097,7 @@ fi
 ### 4. Key auth works (cold + warm retry)
 
 ```bash
+KEY_AUTH_OK=0
 SSH_ARGS=(
   -i "$HOME/.ssh/synology-manager-plus_ed25519"
   -o BatchMode=yes
@@ -1034,32 +1107,46 @@ SSH_ARGS=(
 )
 if ssh "${SSH_ARGS[@]}" "echo ok" 2>/dev/null | grep -q "^ok$"; then
   echo "OK Key authentication works (cold)"
+  KEY_AUTH_OK=1
 elif sleep 2 && ssh "${SSH_ARGS[@]}" "echo ok" 2>/dev/null | grep -q "^ok$"; then
   echo "OK Key authentication works (warm — VPN wake-up absorbed)"
+  KEY_AUTH_OK=1
 else
   echo "FAIL Key auth failed — run /setup-ssh"
 fi
 ```
 
-(The `elif` is a real second attempt with a 2-second pause — covers VPN-tunnel wake-up latency that the first 10s connect-timeout might not absorb. SSH args go through an array so hostnames with hyphens or spaces don't word-split.)
+(The `elif` is a real second attempt with a 2-second pause — covers VPN-tunnel wake-up latency that the first 10s connect-timeout might not absorb. SSH args go through an array so hostnames with hyphens or spaces don't word-split. `KEY_AUTH_OK` lets later checks skip cleanly so a dead NAS doesn't burn 30+ seconds in `/diag`.)
 
 ### 5. Sudo passwordless
 
+Skipped if Check 4 already failed — without working key auth, this would hang for ConnectTimeout seconds and tell the user nothing new.
+
 ```bash
-if ssh "${SSH_ARGS[@]}" "sudo -n true 2>/dev/null"; then
-  echo "OK Sudo available (passwordless)"
+if [ "$KEY_AUTH_OK" -eq 1 ]; then
+  if ssh "${SSH_ARGS[@]}" "sudo -n true 2>/dev/null"; then
+    echo "OK Sudo available (passwordless)"
+  else
+    echo "WARN No passwordless sudo — operations needing root require manual password entry"
+  fi
 else
-  echo "WARN No passwordless sudo — operations needing root require manual password entry"
+  echo "SKIP Sudo check (depends on Check 4)"
 fi
 ```
 
 ### 6. Disk usage query
 
+Same skip rule.
+
 ```bash
-if ssh "${SSH_ARGS[@]}" "df -h" >/dev/null 2>&1; then
-  echo "OK Disk usage query OK"
+if [ "$KEY_AUTH_OK" -eq 1 ]; then
+  if ssh "${SSH_ARGS[@]}" "df -h" >/dev/null 2>&1; then
+    echo "OK Disk usage query OK"
+  else
+    echo "FAIL NAS reachable but df failed — unusual"
+  fi
 else
-  echo "FAIL NAS reachable but df failed — unusual"
+  echo "SKIP Disk usage check (depends on Check 4)"
 fi
 ```
 
@@ -1444,7 +1531,11 @@ Alpine + OpenSSH server with Synology-shaped stub files (`/etc/VERSION`,
 - [ ] **Step 2: Dockerfile schreiben**
 
 ```dockerfile
-FROM alpine:3.19
+# Test fixture image — Alpine major-tag pin tracks the latest 3.x release.
+# Pinning to a specific minor (3.19) would silently rot at EOL (~Nov 2025
+# for that release). The major tag auto-rolls and a CI run produces a fresh
+# image per invocation anyway.
+FROM alpine:3
 
 # Test-fixture only — see README.md.
 # The test password is supplied via --build-arg NAS_TEST_PASSWORD.
@@ -1607,10 +1698,17 @@ cleanup_test_home() {
   fi
 }
 
-ssh_opts() {
-  local key="$HOME/.ssh/synology-manager-plus_ed25519"
-  echo "-i $key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p $MOCK_PORT"
-}
+# SSH options as a global array — same pattern the commands in plugin/
+# enforce. Tests using `ssh "${SSH_OPTS[@]}" ...` mirror that contract;
+# tests using a string-`echo` helper would silently word-split and
+# violate the rule the commands shellcheck against.
+SSH_OPTS=(
+  -i "$HOME/.ssh/synology-manager-plus_ed25519"
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -o ConnectTimeout=10
+  -p "$MOCK_PORT"
+)
 
 gen_plugin_key() {
   ssh-keygen -t ed25519 -N "" \
@@ -1629,7 +1727,7 @@ deploy_plugin_key() {
 }
 
 ssh_mock() {
-  ssh $(ssh_opts) "$MOCK_USER@$MOCK_HOST" "$@"
+  ssh "${SSH_OPTS[@]}" "$MOCK_USER@$MOCK_HOST" "$@"
 }
 
 write_test_profile() {
@@ -1739,7 +1837,7 @@ gen_plugin_key
 [ -f "$HOME/.ssh/synology-manager-plus_ed25519.pub" ] || { echo "FAIL: keygen did not produce pubkey"; exit 1; }
 echo "PASS: plugin key generated at expected path"
 
-if ssh $(ssh_opts) -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" echo ok 2>/dev/null; then
+if ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" echo ok 2>/dev/null; then
   echo "FAIL: key auth succeeded before deploy"
   exit 1
 fi
@@ -1748,7 +1846,7 @@ echo "PASS: pre-deploy auth correctly fails"
 deploy_plugin_key
 echo "PASS: pubkey deployed to mock NAS"
 
-if ssh $(ssh_opts) -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" echo ok | grep -q "^ok$"; then
+if ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" echo ok | grep -q "^ok$"; then
   echo "PASS: post-deploy key auth works"
 else
   echo "FAIL: key auth still broken after deploy"
@@ -1988,13 +2086,13 @@ echo "--- Scenario A: fully configured, NAS reachable ---"
 
 nc -z -w3 "$MOCK_HOST" "$MOCK_PORT" && echo "PASS A3" || { echo "FAIL A3"; exit 1; }
 
-ssh $(ssh_opts) -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" echo ok | grep -q "^ok$" \
+ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" echo ok | grep -q "^ok$" \
   && echo "PASS A4" || { echo "FAIL A4"; exit 1; }
 
-ssh $(ssh_opts) -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" "sudo -n true" \
+ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" "sudo -n true" \
   && echo "PASS A5" || { echo "FAIL A5"; exit 1; }
 
-ssh $(ssh_opts) -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" "df -h" >/dev/null \
+ssh "${SSH_OPTS[@]}" -o BatchMode=yes "$MOCK_USER@$MOCK_HOST" "df -h" >/dev/null \
   && echo "PASS A6" || { echo "FAIL A6"; exit 1; }
 
 echo "--- Scenario B: unreachable port ---"
@@ -2734,9 +2832,12 @@ git push origin v0.2.0
 - §5.2 CHANGELOG → Task 29
 - §5.3 LICENSE → Task 30
 - §6.1 statische Tests → Tasks 12–15
-- §6.2 Mock-NAS Tests → Tasks 16–25
-- §6.3 GitHub Actions → Tasks 26–27
-- §6.4 Akzeptanzkriterien → Tasks 31–34
+- §6.2 Mock-NAS Tests (Bash-Smoke gegen Mock SSH endpoint) → Tasks 16–25
+- §6.3 GitHub Actions → Tasks 26–27 (validate.yml = §6.4 Layer 1, integration.yml = §6.4 Layer 2)
+- §6.4 Akzeptanzkriterien Layer 1 (statisch in CI) → Task 31
+- §6.4 Akzeptanzkriterien Layer 2 (Bash-Smoke in CI) → Task 32
+- §6.4 Akzeptanzkriterien Layer 3 (manuelle Echt-Hardware) → Task 34
+- §6.4 Release-Tag → Task 34 letzter Schritt
 - §7 Sicherheit (Input-Validation) → Tasks 6–10 (Validierungs-Klauseln)
 
 Vollständig.
@@ -2752,3 +2853,6 @@ Konsistent.
 **Placeholder-Scan:** Keine TBDs, TODOs oder „add appropriate error handling" gefunden.
 
 **Hardcoded-Credentials-Check:** Keine hardcoded Passwörter im Plan. Mock-NAS-Test-Passwort wird zur Build-Time generiert (`openssl rand -hex 12`), per `--build-arg NAS_TEST_PASSWORD` an Docker übergeben und per Env-Variable an Test-Skripte weitergereicht. `sshpass` läuft nur in der `-e`-Variante (liest aus `SSHPASS`-Env), nie mit `-p` und Argument.
+
+**Bekannte zukünftige Drift (nicht akut, dokumentiert für Phase 2):**
+- Profile-Extraktion via `awk '{print $3}'` funktioniert nur für single-token Werte. Felder mit Leerzeichen (`model`, `cpu`, RAM-Werte) werden in Phase 1 nicht extrahiert, sondern nur geschrieben — also kein akutes Problem. Sobald ein Phase-2-Command sie wieder ausliest, muss die Extraktion auf `cut -d: -f2- | xargs` oder einen YAML-Parser umgestellt werden.
