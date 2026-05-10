@@ -12,6 +12,3 @@ Thumbs.db
 tests/integration/logs/
 tests/integration/.tmp-home-*
 *.log
-
-# Local plugin cache (when developing against local marketplace)
-.claude-plugin-cache/
