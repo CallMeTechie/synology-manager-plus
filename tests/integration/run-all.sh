@@ -44,6 +44,7 @@ docker build --build-arg NAS_TEST_PASSWORD="$NAS_TEST_PASSWORD" \
 echo "[run-all] Starting mock-nas container"
 docker run -d --rm --name "$CONTAINER_NAME" -p 12222:2222 "$IMAGE_NAME" >/dev/null
 
+# shellcheck disable=SC2034
 for i in $(seq 1 15); do
   if nc -z -w1 localhost 12222 2>/dev/null; then
     break
