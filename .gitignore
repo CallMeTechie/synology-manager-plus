@@ -15,7 +15,3 @@ tests/integration/.tmp-home-*
 
 # Local plugin cache (when developing against local marketplace)
 .claude-plugin-cache/
-
-# Internal-only — kept locally, not pushed to GitHub
-docs/
-**/CLAUDE.md
