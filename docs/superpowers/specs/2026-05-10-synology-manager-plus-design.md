@@ -410,7 +410,7 @@ Ein minimaler Docker-Container basierend auf Alpine + OpenSSH:
 
 - `Dockerfile`:
   - Alpine-Base + `openssh-server`, `bash`, `coreutils`.
-  - User `nas-test` mit Passwort `test123` (klar dokumentiert als Test-Fixture).
+  - User `nas-test`; Passwort wird zur Build-Time per `--build-arg NAS_TEST_PASSWORD` (random via `openssl rand -hex 12`) injiziert. Kein hardcoded Passwort im Repo.
   - SSH auf Port 2222.
   - Synology-spezifische Stub-Dateien gemockt:
     - `/etc/VERSION` mit fake DSM-7-Inhalt.
@@ -425,7 +425,7 @@ Ein minimaler Docker-Container basierend auf Alpine + OpenSSH:
 Jedes Skript folgt dem Muster:
 1. Mock-NAS-Container starten (`docker run -d --rm -p 12222:2222 mock-nas`).
 2. Initial-SSH-Key generieren in temp-Dir (`HOME` für den Test-Lauf temporär umsetzen).
-3. Key per `sshpass + ssh-copy-id` deployen (im CI-Container ist sshpass ok, weil die Credentials als Test-Fixture dokumentiert sind).
+3. Key per `sshpass -e + ssh-copy-id` deployen (`sshpass -e` liest aus `SSHPASS`-Env-Var, das aus `NAS_TEST_PASSWORD` befüllt wird — nie als Argument, nie hardcoded).
 4. Einen leeren `nas-profile.md`-Stub bauen mit Host=`localhost`, Port=`12222`, User=`nas-test`.
 5. Den jeweiligen Command-Markdown so verarbeiten, dass die Bash-Befehle ausgeführt werden (Extraktion + Eval — gleiche Logik wie `shellcheck-commands.sh`).
 6. Erwarteten Output gegen `tests/fixtures/expected-outputs/<test>.txt` diffen (mit Toleranz für Datums-/Hostname-Strings via `sed`).
