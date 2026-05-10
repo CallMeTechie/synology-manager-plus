@@ -61,10 +61,21 @@ deploy_plugin_key() {
   # sshpass -e reads from SSHPASS env var, never from argv (so password
   # never appears in `ps` output, and the literal -p flag does not show
   # up in source — keeps static analysis happy too).
-  SSHPASS="$MOCK_PASS" sshpass -e ssh-copy-id \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$HOME/.ssh/synology-manager-plus_ed25519.pub" \
-    -p "$MOCK_PORT" "$MOCK_USER@$MOCK_HOST" >/dev/null 2>&1
+  # stderr is captured to a temp file rather than dropped — if the deploy
+  # fails, we surface it. stdout (which contains the noisy "INFO: ..."
+  # lines from ssh-copy-id) stays suppressed.
+  local errfile
+  errfile=$(mktemp)
+  if ! SSHPASS="$MOCK_PASS" sshpass -e ssh-copy-id \
+       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+       -i "$HOME/.ssh/synology-manager-plus_ed25519.pub" \
+       -p "$MOCK_PORT" "$MOCK_USER@$MOCK_HOST" >/dev/null 2>"$errfile"; then
+    echo "FAIL [$TEST_NAME]: ssh-copy-id deploy failed. stderr:" >&2
+    cat "$errfile" >&2
+    rm -f "$errfile"
+    return 1
+  fi
+  rm -f "$errfile"
 }
 
 ssh_mock() {
