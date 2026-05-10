@@ -1,6 +1,6 @@
 ---
 description: Query the NAS for current disk usage, RAID status, services, and load. Refreshes context/storage-report.md.
-allowed-tools: Bash, Read, Write, Edit
+allowed-tools: Bash, Read, Write
 ---
 
 # NAS Status

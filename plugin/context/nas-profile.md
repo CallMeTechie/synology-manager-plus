@@ -28,6 +28,10 @@ _Populated by `/first-run`. Do not edit by hand — re-run `/first-run` to refre
 
 _Populated from `df -h` during discovery._
 
+## RAID
+
+_Populated from `/proc/mdstat` during discovery._
+
 ## Shared Folders
 
 _Populated from `ls /volume1/` during discovery._

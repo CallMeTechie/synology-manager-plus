@@ -4,19 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# Required tools — fail loud if anything is missing rather than letting tests
-# explode with cryptic errors deep in a child script.
-for tool in docker nc openssl sshpass ssh-keygen; do
-  command -v "$tool" >/dev/null 2>&1 || {
-    echo "[run-all] FAIL: required tool '$tool' not on PATH"
-    case "$tool" in
-      nc) echo "  Install: sudo apt-get install -y netcat-openbsd";;
-      sshpass) echo "  Install: sudo apt-get install -y sshpass";;
-    esac
-    exit 1
-  }
-done
-
 # Per-process container/image names so parallel CI matrix runs don't collide.
 CONTAINER_NAME="mock-nas-runner-$$"
 IMAGE_NAME="mock-nas:test-$$"
@@ -30,6 +17,19 @@ cleanup() {
   docker rmi "$IMAGE_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+
+# Required tools — fail loud if anything is missing rather than letting tests
+# explode with cryptic errors deep in a child script.
+for tool in docker nc openssl sshpass ssh-keygen; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "[run-all] FAIL: required tool '$tool' not on PATH"
+    case "$tool" in
+      nc) echo "  Install: sudo apt-get install -y netcat-openbsd";;
+      sshpass) echo "  Install: sudo apt-get install -y sshpass";;
+    esac
+    exit 1
+  }
+done
 
 # Generate a fresh random password for the test container on every run.
 # It is passed to docker build via --build-arg and exported so child test

@@ -1,6 +1,6 @@
 # synology-manager-plus v0.2.0 — Phase 1 Design
 
-**Status:** Draft
+**Status:** Implemented (Phase 1 complete, awaiting manual acceptance on real DS218+)
 **Author:** Marc Backes (CallMeTechie)
 **Date:** 2026-05-10
 **Fork of:** [danielrosehill/synology-manager-plugin](https://github.com/danielrosehill/synology-manager-plugin) v0.1.0
