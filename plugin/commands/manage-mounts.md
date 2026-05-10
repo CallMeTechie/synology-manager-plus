@@ -54,30 +54,35 @@ mount | grep -F "$HOST" || echo "No mounts to/from $HOST"
 
 Update `context/mounts/current.txt` with the output and a timestamp header.
 
-## mount <share> <local-path>
+## mount
 
-Validate `<share>` against `^[a-zA-Z0-9_.-]+$` and `<local-path>` is an absolute path matching `^/[^[:space:]]+$`.
+Parse `$ARGUMENTS` into `$SHARE` and `$LOCAL_PATH` (the second and third tokens after the `mount` keyword). Validate `$SHARE` against `^[a-zA-Z0-9_.-]+$` and `$LOCAL_PATH` against `^/[^[:space:]]+$`. Reject and abort on failure.
 
 Ask the user (via `AskUserQuestion`) which protocol to use: NFS or SMB/CIFS.
 
 ```bash
-mkdir -p "<local-path>"
+[[ "$SHARE" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid share name: $SHARE" >&2; exit 1; }
+[[ "$LOCAL_PATH" =~ ^/[^[:space:]]+$ ]] || { echo "Invalid local path: $LOCAL_PATH" >&2; exit 1; }
+
+mkdir -p "$LOCAL_PATH"
 
 # NFS variant:
-sudo mount -t nfs "$HOST":/volume1/<share> "<local-path>"
+sudo mount -t nfs "$HOST:/volume1/$SHARE" "$LOCAL_PATH"
 
 # SMB/CIFS variant:
-sudo mount -t cifs "//$HOST/<share>" "<local-path>" -o "username=$NAS_USER"
+sudo mount -t cifs "//$HOST/$SHARE" "$LOCAL_PATH" -o "username=$NAS_USER"
 ```
 
 After mounting, verify with `mount | grep -F "$HOST"` and append the new mount to `context/mounts/current.txt`.
 
-## unmount <local-path>
+## unmount
 
-Validate `<local-path>` as above.
+Parse `$LOCAL_PATH` from `$ARGUMENTS` (the second token after the `unmount` keyword). Validate as above.
 
 ```bash
-sudo umount "<local-path>"
+[[ "$LOCAL_PATH" =~ ^/[^[:space:]]+$ ]] || { echo "Invalid local path: $LOCAL_PATH" >&2; exit 1; }
+
+sudo umount "$LOCAL_PATH"
 ```
 
 Update `context/mounts/current.txt`.
