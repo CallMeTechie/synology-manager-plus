@@ -1,0 +1,11 @@
+{
+  "name": "synology-manager-plus",
+  "owner": { "name": "CallMeTechie" },
+  "plugins": [
+    {
+      "name": "synology-manager-plus",
+      "source": "./plugin",
+      "description": "Enhanced Synology NAS plugin — fork of danielrosehill/synology-manager-plugin with working installation, automated SSH setup, and health diagnostics."
+    }
+  ]
+}
