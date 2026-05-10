@@ -24,6 +24,7 @@ setup_test_home() {
   chmod 700 "$TMP_HOME/.ssh"
   export HOME="$TMP_HOME"
   echo "[$TEST_NAME] HOME=$TMP_HOME"
+  init_ssh_opts
 }
 
 cleanup_test_home() {
@@ -36,13 +37,19 @@ cleanup_test_home() {
 # enforce. Tests using `ssh "${SSH_OPTS[@]}" ...` mirror that contract;
 # tests using a string-`echo` helper would silently word-split and
 # violate the rule the commands shellcheck against.
-SSH_OPTS=(
-  -i "$HOME/.ssh/synology-manager-plus_ed25519"
-  -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
-  -o ConnectTimeout=10
-  -p "$MOCK_PORT"
-)
+# NOTE: This array must be re-initialized after setup_test_home() is called,
+# since it needs to use the temp HOME directory.
+declare -a SSH_OPTS
+
+init_ssh_opts() {
+  SSH_OPTS=(
+    -i "$HOME/.ssh/synology-manager-plus_ed25519"
+    -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null
+    -o ConnectTimeout=10
+    -p "$MOCK_PORT"
+  )
+}
 
 gen_plugin_key() {
   ssh-keygen -t ed25519 -N "" \
