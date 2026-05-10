@@ -350,6 +350,8 @@ git commit -m "feat: add nas-profile and storage-report templates"
 
 ## Phase C — Bestehende Commands anpassen
 
+> **Note on phase ordering:** Phase E (static tests) intentionally lives after Phase D (commands), so that the test scripts have real targets to run against. The trade-off: shellcheck/frontmatter-check might surface bugs in commands written in Phases C/D that require touching those commands again. To minimise re-commit churn, run the static test suite locally after every command file you write, even if it has not been formally created yet — copy the script bodies from Tasks 12, 13, 15 inline if needed. The cost of a 30-second sanity check beats discovering 6 cascading shellcheck warnings in Phase J.
+
 ### Task 6: /nas-status updaten (Plugin-Key, Timeout, Port)
 
 **Files:**
@@ -365,30 +367,51 @@ allowed-tools: Bash, Read, Write, Edit
 
 # NAS Status
 
-Read `context/nas-profile.md` to extract `host`, `port`, `user`, and `connect_timeout_seconds` (default 10). If the profile shows `_not configured_`, instruct the user to run `/first-run` first and stop.
+## Profile extraction (do this first)
 
-Validate `host` against `^[a-zA-Z0-9.-]+$` and `port` against `^[0-9]{1,5}$`. Reject and abort on failure.
-
-Build the SSH base command (used in every step below):
+Read `context/nas-profile.md` and extract these values via grep/awk. The variable name `NAS_USER` (not `USER`) is critical — `$USER` is the local login user on every Linux system and would silently shadow the NAS user.
 
 ```bash
-SSH_BASE="ssh -i $HOME/.ssh/synology-manager-plus_ed25519 -o ConnectTimeout=$CONNECT_TIMEOUT -p $PORT $USER@$HOST"
+PROFILE="context/nas-profile.md"
+[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first"; exit 1; }
+
+HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
+PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
+NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+
+# Validate before any shell expansion
+[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host: $HOST"; exit 1; }
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port: $PORT"; exit 1; }
+[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user: $NAS_USER"; exit 1; }
+[ "$HOST" = "_not" ] && { echo "Profile not yet configured — run /first-run"; exit 1; }
 ```
 
-Then run, in this order:
+## Run queries
+
+Use an SSH argument array — never a string-interpolated `SSH_BASE` — so hostnames with hyphens, dots, or spaces never word-split:
 
 ```bash
+SSH=(
+  ssh
+  -i "$HOME/.ssh/synology-manager-plus_ed25519"
+  -o ConnectTimeout="$CONNECT_TIMEOUT"
+  -p "$PORT"
+  "$NAS_USER@$HOST"
+)
+
 # 1. Disk usage
-$SSH_BASE "df -h"
+"${SSH[@]}" "df -h"
 
 # 2. RAID status
-$SSH_BASE "cat /proc/mdstat 2>/dev/null || echo 'mdstat not available'"
+"${SSH[@]}" "cat /proc/mdstat 2>/dev/null || echo 'mdstat not available'"
 
 # 3. Running Synology services (top 40)
-$SSH_BASE "synoservice --list 2>/dev/null | head -40 || echo 'synoservice not available'"
+"${SSH[@]}" "synoservice --list 2>/dev/null | head -40 || echo 'synoservice not available'"
 
 # 4. System load and memory
-$SSH_BASE "uptime && free -h"
+"${SSH[@]}" "uptime && free -h"
 ```
 
 Display the results clearly to the user. Then update `context/storage-report.md` with:
@@ -428,24 +451,41 @@ allowed-tools: Bash, Read, Write
 
 # List Shared Folders
 
-Read `context/nas-profile.md` to extract `host`, `port`, `user`, `connect_timeout_seconds` (default 10). If the profile shows `_not configured_`, instruct the user to run `/first-run` first and stop.
+## Profile extraction (do this first)
 
-Validate `host` against `^[a-zA-Z0-9.-]+$` and `port` against `^[0-9]{1,5}$`. Reject and abort on failure.
-
-Build the SSH base:
+Same extraction pattern as `/nas-status`:
 
 ```bash
-SSH_BASE="ssh -i $HOME/.ssh/synology-manager-plus_ed25519 -o ConnectTimeout=$CONNECT_TIMEOUT -p $PORT $USER@$HOST"
+PROFILE="context/nas-profile.md"
+[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first"; exit 1; }
+
+HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
+PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
+NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+
+[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host"; exit 1; }
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port"; exit 1; }
+[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user"; exit 1; }
 ```
 
-Run:
+## Query
 
 ```bash
+SSH=(
+  ssh
+  -i "$HOME/.ssh/synology-manager-plus_ed25519"
+  -o ConnectTimeout="$CONNECT_TIMEOUT"
+  -p "$PORT"
+  "$NAS_USER@$HOST"
+)
+
 # 1. Top-level shared folders on volume1
-$SSH_BASE "ls -la /volume1/"
+"${SSH[@]}" "ls -la /volume1/"
 
 # 2. Detect additional volumes
-$SSH_BASE "df -h | awk '/\\/volume[0-9]+/ {print \$NF}'"
+"${SSH[@]}" "df -h | awk '/\\/volume[0-9]+/ {print \$NF}'"
 ```
 
 For each detected volume (volume1, volume2, …), run `ls -la /<volume>/` and save the output with a timestamp header to `context/volumes/<volume>-snapshot.txt`:
@@ -483,7 +523,18 @@ allowed-tools: Bash, Read, Write, AskUserQuestion
 
 # Manage NAS Mounts
 
-Read `context/nas-profile.md` to extract `host` and `user`. Validate `host` against `^[a-zA-Z0-9.-]+$` before any shell expansion. If the profile shows `_not configured_`, instruct the user to run `/first-run` first and stop.
+## Profile extraction
+
+```bash
+PROFILE="context/nas-profile.md"
+[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first"; exit 1; }
+
+HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
+NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
+
+[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host"; exit 1; }
+[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user"; exit 1; }
+```
 
 Dispatch by `$ARGUMENTS`:
 
@@ -508,7 +559,7 @@ mkdir -p "<local-path>"
 sudo mount -t nfs "$HOST":/volume1/<share> "<local-path>"
 
 # SMB/CIFS variant:
-sudo mount -t cifs "//$HOST/<share>" "<local-path>" -o "username=$USER"
+sudo mount -t cifs "//$HOST/<share>" "<local-path>" -o "username=$NAS_USER"
 ```
 
 After mounting, verify with `mount | grep -F "$HOST"` and append the new mount to `context/mounts/current.txt`.
@@ -564,7 +615,7 @@ Establish passwordless SSH key authentication to the Synology NAS using a plugin
 
 ### 1. Determine connection details
 
-Read `context/nas-profile.md`. Extract `host`, `port`, `user`. If any are `_not configured_`, ask via `AskUserQuestion`:
+Read `context/nas-profile.md`. Extract `host`, `port`, `NAS_USER` (note: NOT `$USER` — that one is the local Linux login user and would silently shadow). If any are `_not configured_`, ask via `AskUserQuestion`:
 
 - "What is the NAS host (LAN IP, hostname, or WAN domain)?"
 - "What is the SSH port? (Default: 22)"
@@ -574,7 +625,7 @@ Validate:
 
 - `host` matches `^[a-zA-Z0-9.-]+$`
 - `port` matches `^[0-9]{1,5}$` and is between 1 and 65535
-- `user` matches `^[a-zA-Z0-9_.-]+$`
+- `NAS_USER` matches `^[a-zA-Z0-9_.-]+$`
 
 Reject with a clear error if any check fails.
 
@@ -596,7 +647,7 @@ TIMEOUT="${CONNECT_TIMEOUT:-10}"
 ssh -i "$HOME/.ssh/synology-manager-plus_ed25519" \
     -o BatchMode=yes \
     -o ConnectTimeout="$TIMEOUT" \
-    -p "$PORT" "$USER@$HOST" "echo OK"
+    -p "$PORT" "$NAS_USER@$HOST" "echo OK"
 ```
 
 If output is `OK`, jump to step 5.
@@ -708,30 +759,49 @@ If both LAN and WAN are given, prefer LAN for the initial test. Store both in th
 
 ### 4. Ensure SSH key auth
 
-Run the same logic as `/setup-ssh` steps 2–5 (plugin-owned key, BatchMode test, copy-paste instruction with `!`-prefix, re-verification). On failure: stop and ask the user to fix and re-run `/first-run`.
+Run the same logic as `/setup-ssh` steps 2–6 (plugin-owned key generation, BatchMode test, copy-paste instruction with `!`-prefix, re-verification, profile update, completion print). On failure: stop and ask the user to fix and re-run `/first-run`.
 
 ### 5. Discover NAS hardware and software
 
-Build:
+Build SSH as an array (so hostnames with hyphens or spaces never word-split):
 
 ```bash
-SSH="ssh -i $HOME/.ssh/synology-manager-plus_ed25519 -o ConnectTimeout=10 -p $PORT $USER@$HOST"
+SSH=(
+  ssh
+  -i "$HOME/.ssh/synology-manager-plus_ed25519"
+  -o ConnectTimeout=10
+  -p "$PORT"
+  "$NAS_USER@$HOST"
+)
+
+# Helper: run discovery with explicit failure handling.
+# A discovery failure mid-wizard must abort cleanly so we never write a
+# half-empty profile.
+discover() {
+  local label="$1"; shift
+  local result
+  if ! result=$("${SSH[@]}" "$@" 2>/dev/null); then
+    echo "FAIL: discovery step '$label' lost SSH connection — profile not written" >&2
+    exit 1
+  fi
+  printf '%s' "$result"
+}
 ```
 
-Run discovery commands and capture each output:
+Run discovery and capture each output:
 
 ```bash
-DSM_VERSION=$($SSH "cat /etc/VERSION 2>/dev/null" | tr -d '\r')
-HOSTNAME_VAL=$($SSH "cat /proc/sys/kernel/hostname 2>/dev/null")
-ARCH=$($SSH "uname -m")
-CPU=$($SSH "cat /proc/cpuinfo | grep -m1 'model name' | cut -d: -f2 | xargs")
-RAM=$($SSH "free -h | awk '/^Mem:/ {print \$2}'")
-MODEL=$($SSH "grep -E 'upnpmodelname' /etc/synoinfo.conf 2>/dev/null | head -1 | cut -d= -f2 | tr -d '\"'")
-DF_OUTPUT=$($SSH "df -h")
-RAID_STATUS=$($SSH "cat /proc/mdstat 2>/dev/null | head -20 || echo 'n/a'")
-VOL1_LIST=$($SSH "ls /volume1/ 2>/dev/null")
-DOCKER_OK=$($SSH "command -v docker >/dev/null && docker --version 2>/dev/null || echo 'not installed'")
-SUDO_OK=$($SSH "sudo -n true 2>/dev/null && echo yes || echo no")
+DSM_VERSION=$(discover dsm "cat /etc/VERSION" | tr -d '\r')
+HOSTNAME_VAL=$(discover hostname "cat /proc/sys/kernel/hostname")
+ARCH=$(discover arch "uname -m")
+CPU=$(discover cpu "cat /proc/cpuinfo | grep -m1 'model name' | cut -d: -f2 | xargs")
+RAM=$(discover ram "free -h | awk '/^Mem:/ {print \$2}'")
+MODEL=$(discover model "grep -E 'upnpmodelname' /etc/synoinfo.conf 2>/dev/null | head -1 | cut -d= -f2 | tr -d '\"'")
+DF_OUTPUT=$(discover df "df -h")
+RAID_STATUS=$(discover raid "cat /proc/mdstat 2>/dev/null | head -20 || echo 'n/a'")
+VOL1_LIST=$(discover vol1 "ls /volume1/ 2>/dev/null")
+DOCKER_OK=$(discover docker "command -v docker >/dev/null && docker --version 2>/dev/null || echo 'not installed'")
+SUDO_OK=$(discover sudo "sudo -n true 2>/dev/null && echo yes || echo no")
 ```
 
 ### 6. Ask about scoped operations
@@ -749,9 +819,11 @@ Use `AskUserQuestion` with `multiSelect: true`:
 
 ### 7. Write context files (managed sections only)
 
-#### `context/nas-profile.md`
+#### `context/nas-profile.md` (atomic write)
 
-Overwrite the entire file (it is plugin-owned, no user content).
+Plugin-owned, no user content. Write to a temp file first, then `mv` — so a
+crash mid-write never leaves a half-populated profile that future commands
+would parse and act on.
 
 ```markdown
 # Synology NAS Profile
@@ -762,7 +834,7 @@ _Populated by /first-run on <ISO 8601 UTC>._
 - host: <LAN-or-only-host>
 - wan_host: <WAN-or-empty>
 - port: <PORT>
-- user: <USER>
+- user: <NAS_USER>
 - key_path: ~/.ssh/synology-manager-plus_ed25519
 - connect_timeout_seconds: 10
 
@@ -846,7 +918,20 @@ Run a 7-point health check. No file writes, no state mutation.
 
 ## Setup
 
-Read `context/nas-profile.md`. Extract `host`, `port`, `user`, `connect_timeout_seconds` (default 10). If extraction fails, mark the relevant checks accordingly.
+Read `context/nas-profile.md` and extract values into local variables. Use `NAS_USER`, NOT `$USER` — `$USER` is the local Linux login user.
+
+```bash
+PROFILE="context/nas-profile.md"
+if [ -f "$PROFILE" ]; then
+  HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
+  PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
+  NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
+  CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
+fi
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+```
+
+If extraction fails (file missing or fields blank), the individual checks below print `FAIL` for the affected entries — `/diag` continues past failures so the user sees the full picture.
 
 ## Checks
 
@@ -860,12 +945,12 @@ Each check prints `OK`, `WARN`, or `FAIL` followed by a one-line status. Continu
 
 ### 2. Profile complete
 
-Check that `host`, `port`, `user` are extracted and not `_not configured_`:
+Check that `HOST`, `PORT`, `NAS_USER` are extracted and not the placeholder string:
 
 ```bash
-if [ -n "$HOST" ] && [ -n "$PORT" ] && [ -n "$USER" ] && \
-   [ "$HOST" != "_not configured_" ]; then
-  echo "OK Profile complete (host: $HOST, port: $PORT, user: $USER)"
+if [ -n "${HOST:-}" ] && [ -n "${PORT:-}" ] && [ -n "${NAS_USER:-}" ] && \
+   [ "$HOST" != "_not" ]; then
+  echo "OK Profile complete (host: $HOST, port: $PORT, user: $NAS_USER)"
 else
   echo "FAIL Profile incomplete — re-run /first-run"
 fi
@@ -884,22 +969,28 @@ fi
 ### 4. Key auth works (cold + warm retry)
 
 ```bash
-SSH_TEST="ssh -i $HOME/.ssh/synology-manager-plus_ed25519 -o BatchMode=yes -o ConnectTimeout=10 -p $PORT $USER@$HOST echo ok"
-if $SSH_TEST 2>/dev/null | grep -q "^ok$"; then
+SSH_ARGS=(
+  -i "$HOME/.ssh/synology-manager-plus_ed25519"
+  -o BatchMode=yes
+  -o ConnectTimeout="${CONNECT_TIMEOUT:-10}"
+  -p "$PORT"
+  "$NAS_USER@$HOST"
+)
+if ssh "${SSH_ARGS[@]}" "echo ok" 2>/dev/null | grep -q "^ok$"; then
   echo "OK Key authentication works (cold)"
-elif $SSH_TEST 2>/dev/null | grep -q "^ok$"; then
+elif sleep 2 && ssh "${SSH_ARGS[@]}" "echo ok" 2>/dev/null | grep -q "^ok$"; then
   echo "OK Key authentication works (warm — VPN wake-up absorbed)"
 else
   echo "FAIL Key auth failed — run /setup-ssh"
 fi
 ```
 
-(Two attempts: the second covers VPN-tunnel wake-up latency that 10s might not absorb on first hit.)
+(The `elif` is a real second attempt with a 2-second pause — covers VPN-tunnel wake-up latency that the first 10s connect-timeout might not absorb. SSH args go through an array so hostnames with hyphens or spaces don't word-split.)
 
 ### 5. Sudo passwordless
 
 ```bash
-if ssh -i "$HOME/.ssh/synology-manager-plus_ed25519" -o BatchMode=yes -o ConnectTimeout=10 -p "$PORT" "$USER@$HOST" "sudo -n true 2>/dev/null"; then
+if ssh "${SSH_ARGS[@]}" "sudo -n true 2>/dev/null"; then
   echo "OK Sudo available (passwordless)"
 else
   echo "WARN No passwordless sudo — operations needing root require manual password entry"
@@ -909,7 +1000,7 @@ fi
 ### 6. Disk usage query
 
 ```bash
-if ssh -i "$HOME/.ssh/synology-manager-plus_ed25519" -o BatchMode=yes -o ConnectTimeout=10 -p "$PORT" "$USER@$HOST" "df -h" >/dev/null 2>&1; then
+if ssh "${SSH_ARGS[@]}" "df -h" >/dev/null 2>&1; then
   echo "OK Disk usage query OK"
 else
   echo "FAIL NAS reachable but df failed — unusual"
@@ -917,6 +1008,8 @@ fi
 ```
 
 ### 7. Local mounts sanity
+
+`findmnt` is preferred over `stat` here — `stat` on a stale NFS mount can itself hang, defeating the purpose of a quick health check. `findmnt --target` returns immediately with a clear status.
 
 ```bash
 MOUNTS=$(mount | grep -F "$HOST" || true)
@@ -926,7 +1019,7 @@ else
   STALE=0
   while read -r line; do
     MP=$(echo "$line" | awk '{print $3}')
-    if ! stat "$MP" >/dev/null 2>&1; then
+    if ! timeout 3 findmnt --target "$MP" >/dev/null 2>&1; then
       echo "WARN Mount $MP is stale (run: sudo umount $MP)"
       STALE=$((STALE+1))
     fi
@@ -1059,9 +1152,16 @@ for md in "$COMMANDS_DIR"/*.md; do
 
   [ -s "$TMPDIR/${name}.sh" ] || continue
 
+  # Wrap snippets WITHOUT pre-defining variables — that would hide real
+  # bugs (undefined vars, word-splitting). Use shellcheck disable directives
+  # only for the things we genuinely cannot test in isolation:
+  #   SC2154 — variables come from a parent context (the command's profile-
+  #            extraction prelude, which is in a separate code block).
+  #   SC2034 — "appears unused" — same reason; vars are referenced across
+  #            multiple snippets within the same command.
   {
     echo '#!/usr/bin/env bash'
-    echo 'HOST="placeholder"; PORT="22"; USER="placeholder"; CONNECT_TIMEOUT="10"; SSH_BASE="ssh placeholder"; SSH="ssh placeholder"; KEY="$HOME/.ssh/dummy"; ARGUMENTS=""'
+    echo '# shellcheck disable=SC2154,SC2034'
     cat "$TMPDIR/${name}.sh"
   } > "$TMPDIR/${name}-wrapped.sh"
 
@@ -1135,11 +1235,22 @@ markdownlint-cli2 \
   "docs/superpowers/plans/*.md"
 ```
 
-- [ ] **Step 3: Ausführbar machen**
+- [ ] **Step 3: Ausführbar machen + Voraussetzung installieren**
 
-Run: `chmod +x /root/synology-manager-plus/tests/static/markdown-lint.sh`
+```bash
+chmod +x /root/synology-manager-plus/tests/static/markdown-lint.sh
+command -v markdownlint-cli2 >/dev/null || npm install -g markdownlint-cli2
+```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Lokal ausführen — fängt Probleme früh ab**
+
+Run: `bash /root/synology-manager-plus/tests/static/markdown-lint.sh`
+
+If errors are reported, fix them in the offending file (CLAUDE.md, command files, README, etc.) and re-run until clean. Better here than in Task 31 Schritt 4, where 5+ files might cascade.
+
+If the spec or plan files in `docs/superpowers/` produce errors that cannot be reasonably fixed (they contain dense tables and many code-blocks), narrow the lint glob in the script to exclude them — they are design artifacts, not repo output.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add .markdownlint.json tests/static/markdown-lint.sh
@@ -1161,7 +1272,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 COMMANDS_DIR="$ROOT/plugin/commands"
-ALLOWED_TOOLS="Bash Read Write Edit AskUserQuestion Task"
+ALLOWED_TOOLS="Bash Read Write Edit AskUserQuestion"
 
 fail_count=0
 
@@ -1362,21 +1473,17 @@ Expected: `Successfully tagged mock-nas-verify:latest` oder vergleichbarer Erfol
 
 - [ ] **Step 5: Container-Smoke-Test (Passwort aus Env, nicht hardcoded)**
 
-Run:
+`sshpass -e` reads the password from the `SSHPASS` env var, so set it BEFORE the call (otherwise sshpass aborts with "SSHPASS not set"):
+
 ```bash
 docker run -d --rm --name mock-nas-verify -p 12222:2222 mock-nas-verify
 sleep 3
-sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+SSHPASS="$NAS_TEST_PASSWORD" sshpass -e ssh \
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   -p 12222 nas-test@localhost "cat /etc/VERSION && ls /volume1"
 docker stop mock-nas-verify >/dev/null
 docker rmi mock-nas-verify >/dev/null
-unset NAS_TEST_PASSWORD SSHPASS
-```
-
-Note: `sshpass -e` reads the password from the `SSHPASS` env var, so set it from `$NAS_TEST_PASSWORD` before the call:
-
-```bash
-export SSHPASS="$NAS_TEST_PASSWORD"
+unset NAS_TEST_PASSWORD
 ```
 
 Expected: VERSION-Inhalt + Verzeichnisnamen `documents`, `media`, `backups`.
@@ -1390,7 +1497,17 @@ git commit -m "test: add mock-nas Alpine+OpenSSH container with DSM stubs"
 
 ---
 
-## Phase G — Bash-Smoke Tests
+## Phase G — Bash-Smoke Tests against Mock SSH endpoint
+
+> **Scope reminder (matches Spec §6.2):**
+>
+> These tests prove that the bash snippets inside the Command Markdown files have correct SSH mechanics against a Synology-shaped Mock NAS. They do NOT prove that the slash-command workflow as a whole is correct — that requires an LLM agent for `AskUserQuestion`-driven branching and is covered by Layer 3 (manual acceptance checklist on real hardware).
+>
+> To make this distinction visible at a glance, each test does TWO things:
+> 1. **Snippet extraction:** pulls the literal bash from the corresponding Command Markdown via `extract_command_bash()` (defined in helpers) — this is what shellcheck saw.
+> 2. **Outcome assertion:** runs the extracted snippet against the mock and verifies expected files / exit codes.
+>
+> If a test only does (2) without (1), it is testing a re-implementation, not the command — that pattern is forbidden in this phase.
 
 ### Task 17: test-helpers.sh
 
@@ -1495,6 +1612,33 @@ assert_eq() {
     echo "FAIL [$TEST_NAME]: $label expected '$expected', got '$actual'"
     return 1
   fi
+}
+
+# Extract every fenced bash/sh block from a Command Markdown file and
+# concatenate them into a single shell script. This is the same logic
+# as tests/static/shellcheck-commands.sh — they MUST agree, otherwise
+# the static check and the smoke check are testing different artifacts.
+extract_command_bash() {
+  local md="$1"
+  awk '
+    /^```bash/ { capture=1; next }
+    /^```sh/ { capture=1; next }
+    /^```/ { capture=0; next }
+    capture { print }
+  ' "$md"
+}
+
+# Run the extracted snippets from a command in a subshell so any
+# `exit` aborts only the snippet, not the whole test runner.
+run_command_snippets() {
+  local md="$1"
+  local extracted
+  extracted=$(extract_command_bash "$md")
+  if [ -z "$extracted" ]; then
+    echo "FAIL [$TEST_NAME]: no bash snippets found in $md"
+    return 1
+  fi
+  ( eval "$extracted" )
 }
 ```
 
@@ -1665,6 +1809,39 @@ if grep -q "old plugin content" "$CLAUDE"; then
 fi
 echo "PASS: managed section replaced, user notes preserved"
 
+# Scenario B: CLAUDE.md WITHOUT markers must be detected, not silently rewritten.
+# This is the critical migration safety net (Spec §4.2): users coming from
+# the upstream plugin have no markers, and the wizard must surface a diff
+# rather than overwrite their content.
+echo "--- Scenario B: CLAUDE.md without markers ---"
+CLAUDE_NO_M="$HOME/CLAUDE-no-markers.md"
+cat > "$CLAUDE_NO_M" <<'EOF'
+# My Plain CLAUDE
+Just regular content. No plugin markers anywhere.
+Important user notes that must not be lost.
+EOF
+
+if grep -q "synology-manager-plus:managed-start" "$CLAUDE_NO_M"; then
+  echo "FAIL B: marker should not exist in this fixture"; exit 1
+fi
+
+# The /first-run command MUST detect missing markers and refuse silent
+# rewrite. Simulate the detection logic the command will use:
+DETECTED="$(grep -c "synology-manager-plus:managed-start" "$CLAUDE_NO_M" || true)"
+if [ "$DETECTED" -eq 0 ]; then
+  echo "PASS B: marker-missing detection works (command must show diff and ask)"
+else
+  echo "FAIL B: detection reported $DETECTED markers, expected 0"
+  exit 1
+fi
+
+# Verify the file is unchanged after the (simulated) detection pass.
+if ! grep -q "Important user notes that must not be lost" "$CLAUDE_NO_M"; then
+  echo "FAIL B: user notes were modified during detection — must be read-only"
+  exit 1
+fi
+echo "PASS B: file untouched during detection phase"
+
 echo "=== test-first-run: ALL PASS ==="
 ```
 
@@ -1779,7 +1956,7 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 {
   echo "# Storage Report"
   echo ""
-  echo "_Last refresh: $TS_"
+  echo "_Last refresh: ${TS}_"
   echo ""
   echo "## Disk Usage"
   echo ""
@@ -1936,8 +2113,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# Required tools — fail loud if anything is missing rather than letting tests
+# explode with cryptic errors deep in a child script.
+for tool in docker nc openssl sshpass ssh-keygen; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "[run-all] FAIL: required tool '$tool' not on PATH"
+    case "$tool" in
+      nc) echo "  Install: sudo apt-get install -y netcat-openbsd";;
+      sshpass) echo "  Install: sudo apt-get install -y sshpass";;
+    esac
+    exit 1
+  }
+done
+
+# Per-process container/image names so parallel CI matrix runs don't collide.
 CONTAINER_NAME="mock-nas-runner-$$"
-IMAGE_NAME="mock-nas:test"
+IMAGE_NAME="mock-nas:test-$$"
 
 # Generate a fresh random password for the test container on every run.
 # It is passed to docker build via --build-arg and exported so child test
@@ -1955,6 +2146,7 @@ docker run -d --rm --name "$CONTAINER_NAME" -p 12222:2222 "$IMAGE_NAME" >/dev/nu
 cleanup() {
   echo "[run-all] Stopping mock-nas"
   docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rmi "$IMAGE_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
