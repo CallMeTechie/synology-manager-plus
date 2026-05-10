@@ -369,11 +369,21 @@ allowed-tools: Bash, Read, Write, Edit
 
 ## Profile extraction (do this first)
 
-Read `context/nas-profile.md` and extract these values via grep/awk. The variable name `NAS_USER` (not `USER`) is critical — `$USER` is the local login user on every Linux system and would silently shadow the NAS user.
+Read `context/nas-profile.md` and extract values. Variable name `NAS_USER` (not `USER`) — `$USER` is the local login user on every Linux system and would silently shadow.
+
+The placeholder check uses a positive grep against the template string (`_not configured_`) instead of fishing out word-3 ("`_not`") with awk. The grep approach survives template changes (e.g. switching to `<unset>`); the awk-word approach is fragile by accident.
 
 ```bash
 PROFILE="context/nas-profile.md"
-[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first"; exit 1; }
+[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first" >&2; exit 1; }
+
+# Reject any profile that still has placeholder values for core fields.
+for field in host port user; do
+  if grep -qE "^- ${field}: _not configured_" "$PROFILE"; then
+    echo "Profile not yet configured (field '${field}' is placeholder) — run /first-run" >&2
+    exit 1
+  fi
+done
 
 HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
 PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
@@ -381,11 +391,18 @@ NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
 CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
 
-# Validate before any shell expansion
-[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host: $HOST"; exit 1; }
-[[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port: $PORT"; exit 1; }
-[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user: $NAS_USER"; exit 1; }
-[ "$HOST" = "_not" ] && { echo "Profile not yet configured — run /first-run"; exit 1; }
+# Empty extraction is its own failure mode (malformed profile, multi-word value).
+# Surface which line is bad rather than the generic "Invalid".
+for var in HOST PORT NAS_USER; do
+  if [ -z "${!var}" ]; then
+    echo "Profile field $var is empty or malformed in $PROFILE — re-run /first-run" >&2
+    exit 1
+  fi
+done
+
+[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host: $HOST" >&2; exit 1; }
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port: $PORT" >&2; exit 1; }
+[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user: $NAS_USER" >&2; exit 1; }
 ```
 
 ## Run queries
@@ -453,22 +470,7 @@ allowed-tools: Bash, Read, Write
 
 ## Profile extraction (do this first)
 
-Same extraction pattern as `/nas-status`:
-
-```bash
-PROFILE="context/nas-profile.md"
-[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first"; exit 1; }
-
-HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
-PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
-NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
-CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
-CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
-
-[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host"; exit 1; }
-[[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port"; exit 1; }
-[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user"; exit 1; }
-```
+Use the SAME extraction block as `/nas-status` (placeholder grep + extract + non-empty check + regex validation). When implementing, copy it literally — DRY here means the static `shellcheck-commands.sh` validates it once but every command file carries its own copy because Markdown commands cannot share helper code.
 
 ## Query
 
@@ -525,16 +527,7 @@ allowed-tools: Bash, Read, Write, AskUserQuestion
 
 ## Profile extraction
 
-```bash
-PROFILE="context/nas-profile.md"
-[ -f "$PROFILE" ] || { echo "Profile missing — run /first-run first"; exit 1; }
-
-HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
-NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
-
-[[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host"; exit 1; }
-[[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user"; exit 1; }
-```
+Use the SAME extraction block as `/nas-status` (placeholder-grep + extract + non-empty check + regex validation). For `/manage-mounts` only `HOST` and `NAS_USER` are strictly required — `PORT` and `CONNECT_TIMEOUT` are not used by this command, but extracting them anyway keeps the prelude identical and reduces drift between commands.
 
 Dispatch by `$ARGUMENTS`:
 
@@ -776,12 +769,26 @@ SSH=(
 
 # Helper: run discovery with explicit failure handling.
 # A discovery failure mid-wizard must abort cleanly so we never write a
-# half-empty profile.
+# half-empty profile. stderr is captured and surfaced — a generic "SSH
+# dropped" message is wrong 4 times out of 5 (most failures are auth,
+# command-not-found on NAS, or permission denied), so we show the real
+# diagnostic from sshd / the remote shell.
 discover() {
   local label="$1"; shift
-  local result
-  if ! result=$("${SSH[@]}" "$@" 2>/dev/null); then
-    echo "FAIL: discovery step '$label' lost SSH connection — profile not written" >&2
+  local result errfile
+  errfile=$(mktemp)
+  if ! result=$("${SSH[@]}" "$@" 2>"$errfile"); then
+    echo "FAIL: discovery step '$label' failed. Remote stderr:" >&2
+    cat "$errfile" >&2
+    rm -f "$errfile"
+    exit 1
+  fi
+  rm -f "$errfile"
+  # Required fields must not be empty — a successful SSH that returns
+  # nothing means the remote command produced no output, which is a
+  # different failure mode and equally fatal for profile correctness.
+  if [ -z "$result" ] && [ "$label" != "raid" ]; then
+    echo "FAIL: discovery step '$label' returned empty — profile not written" >&2
     exit 1
   fi
   printf '%s' "$result"
@@ -790,18 +797,38 @@ discover() {
 
 Run discovery and capture each output:
 
+Discovery commands intentionally do NOT swallow stderr at the SSH-payload
+level — `discover()` captures and surfaces it. Inner pipelines that
+legitimately tolerate "missing on this box" (RAID, Docker, sudo) explicitly
+say so via `|| echo`; everything else must succeed or the wizard aborts.
+
 ```bash
 DSM_VERSION=$(discover dsm "cat /etc/VERSION" | tr -d '\r')
 HOSTNAME_VAL=$(discover hostname "cat /proc/sys/kernel/hostname")
 ARCH=$(discover arch "uname -m")
 CPU=$(discover cpu "cat /proc/cpuinfo | grep -m1 'model name' | cut -d: -f2 | xargs")
 RAM=$(discover ram "free -h | awk '/^Mem:/ {print \$2}'")
-MODEL=$(discover model "grep -E 'upnpmodelname' /etc/synoinfo.conf 2>/dev/null | head -1 | cut -d= -f2 | tr -d '\"'")
+MODEL=$(discover model "grep -E 'upnpmodelname' /etc/synoinfo.conf | head -1 | cut -d= -f2 | tr -d '\"'")
 DF_OUTPUT=$(discover df "df -h")
-RAID_STATUS=$(discover raid "cat /proc/mdstat 2>/dev/null | head -20 || echo 'n/a'")
-VOL1_LIST=$(discover vol1 "ls /volume1/ 2>/dev/null")
-DOCKER_OK=$(discover docker "command -v docker >/dev/null && docker --version 2>/dev/null || echo 'not installed'")
+# RAID is the one optional field — non-Synology DSM-likes won't have mdstat,
+# and discover() exempts label 'raid' from the empty-result check.
+RAID_STATUS=$(discover raid "cat /proc/mdstat | head -20 2>/dev/null || echo 'n/a'")
+VOL1_LIST=$(discover vol1 "ls /volume1/")
+DOCKER_OK=$(discover docker "command -v docker >/dev/null && docker --version || echo 'not installed'")
 SUDO_OK=$(discover sudo "sudo -n true 2>/dev/null && echo yes || echo no")
+```
+
+Validate the must-have fields explicitly — `discover()` already aborts on
+empty for non-RAID, but a human-readable second pass before profile write
+makes the failure mode obvious in the wizard output:
+
+```bash
+for var in DSM_VERSION HOSTNAME_VAL ARCH MODEL VOL1_LIST; do
+  if [ -z "${!var}" ]; then
+    echo "FAIL: required discovery field $var is empty — profile not written" >&2
+    exit 1
+  fi
+done
 ```
 
 ### 6. Ask about scoped operations
@@ -873,10 +900,24 @@ Append `<ISO 8601 UTC>` header + local `mount | grep -F "$HOST" || echo "no moun
 
 #### `CLAUDE.md` (managed-section only)
 
-1. Read `plugin/CLAUDE.md`.
-2. Locate the managed-start and managed-end markers. If either is missing, present a diff of the proposed managed-section and ask via `AskUserQuestion` whether to insert it. Do NOT silently rewrite.
-3. Replace the content **between** the markers with the new Quick Reference table (populated values) and the Scoped Operations checklist (`[x]` for selected, `[ ]` for not selected).
-4. Content **after** the managed-end marker is left untouched.
+1. Read `CLAUDE.md`.
+2. Count the markers explicitly — a single asymmetric marker would silently delete user content if naively rewritten:
+
+   ```bash
+   START_COUNT=$(grep -c '<!-- synology-manager-plus:managed-start -->' CLAUDE.md || true)
+   END_COUNT=$(grep -c '<!-- synology-manager-plus:managed-end -->' CLAUDE.md || true)
+   ```
+
+3. Decide based on the counts:
+   - `START_COUNT == 1 && END_COUNT == 1` — happy path, proceed to step 4.
+   - `START_COUNT == 0 && END_COUNT == 0` — fresh file (e.g. migrated from upstream). Show a diff of the proposed managed block and ask via `AskUserQuestion`: "Insert the managed section at the top of CLAUDE.md? (Yes / No / Show diff again)".
+   - Any other combination (asymmetric markers, duplicates) — refuse to write. Print: "CLAUDE.md has malformed markers (start: $START_COUNT, end: $END_COUNT). Fix manually before re-running /first-run." Exit 1. This is the safety net that prevents the awk replacer from deleting everything after a lone start-marker.
+
+4. Replace the content **between** the markers with the new Quick Reference table (populated values) and the Scoped Operations checklist (`[x]` for selected, `[ ]` for not selected). The awk script must reset `in_block=0` at start (`BEGIN { in_block=0 }`) for idempotent re-runs.
+
+5. Content **after** the managed-end marker is left untouched.
+
+6. Write the result atomically (`tmp + mv`) so a crash during write never leaves CLAUDE.md half-rewritten.
 
 ### 8. Summary
 
@@ -918,20 +959,32 @@ Run a 7-point health check. No file writes, no state mutation.
 
 ## Setup
 
-Read `context/nas-profile.md` and extract values into local variables. Use `NAS_USER`, NOT `$USER` — `$USER` is the local Linux login user.
+`/diag` is read-only and must not exit early — it continues past failures so the user sees every check. Therefore the extraction here is gentler than in `/nas-status`: it sets variables to empty strings on missing data, and the per-check assertions below decide what's a `FAIL` versus `WARN` versus `OK`.
+
+Use `NAS_USER`, NOT `$USER` — `$USER` is the local Linux login user.
 
 ```bash
 PROFILE="context/nas-profile.md"
+HOST=""; PORT=""; NAS_USER=""; CONNECT_TIMEOUT=""
+
 if [ -f "$PROFILE" ]; then
   HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
   PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
   NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
   CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
+  # Treat placeholder values as empty so check 2 reports incomplete.
+  for field in host port user; do
+    if grep -qE "^- ${field}: _not configured_" "$PROFILE"; then
+      case $field in
+        host) HOST="" ;;
+        port) PORT="" ;;
+        user) NAS_USER="" ;;
+      esac
+    fi
+  done
 fi
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
 ```
-
-If extraction fails (file missing or fields blank), the individual checks below print `FAIL` for the affected entries — `/diag` continues past failures so the user sees the full picture.
 
 ## Checks
 
@@ -945,14 +998,17 @@ Each check prints `OK`, `WARN`, or `FAIL` followed by a one-line status. Continu
 
 ### 2. Profile complete
 
-Check that `HOST`, `PORT`, `NAS_USER` are extracted and not the placeholder string:
+All three fields must be present (placeholders are normalised to empty in the extraction prelude above, so a single `-n` check covers both "missing" and "still placeholder").
 
 ```bash
-if [ -n "${HOST:-}" ] && [ -n "${PORT:-}" ] && [ -n "${NAS_USER:-}" ] && \
-   [ "$HOST" != "_not" ]; then
+if [ -n "$HOST" ] && [ -n "$PORT" ] && [ -n "$NAS_USER" ]; then
   echo "OK Profile complete (host: $HOST, port: $PORT, user: $NAS_USER)"
 else
-  echo "FAIL Profile incomplete — re-run /first-run"
+  missing=()
+  [ -z "$HOST" ] && missing+=(host)
+  [ -z "$PORT" ] && missing+=(port)
+  [ -z "$NAS_USER" ] && missing+=(user)
+  echo "FAIL Profile incomplete (missing: ${missing[*]}) — re-run /first-run"
 fi
 ```
 
@@ -1628,8 +1684,11 @@ extract_command_bash() {
   ' "$md"
 }
 
-# Run the extracted snippets from a command in a subshell so any
-# `exit` aborts only the snippet, not the whole test runner.
+# Run the extracted snippets from a command in a subshell with strict
+# error handling forced ON. The subshell exits 0 only if the entire
+# concatenated snippet ran cleanly. Without explicit `set -euo pipefail`
+# inside the subshell, a snippet containing `set +e` could disable
+# error handling and pass spurious test runs.
 run_command_snippets() {
   local md="$1"
   local extracted
@@ -1638,7 +1697,10 @@ run_command_snippets() {
     echo "FAIL [$TEST_NAME]: no bash snippets found in $md"
     return 1
   fi
-  ( eval "$extracted" )
+  if ! ( set -euo pipefail; eval "$extracted" ); then
+    echo "FAIL [$TEST_NAME]: snippet from $md exited non-zero"
+    return 1
+  fi
 }
 ```
 
@@ -1841,6 +1903,47 @@ if ! grep -q "Important user notes that must not be lost" "$CLAUDE_NO_M"; then
   exit 1
 fi
 echo "PASS B: file untouched during detection phase"
+
+# Scenario C: only START marker present — the asymmetric case that
+# would catastrophically delete everything below the start marker
+# under a naive awk rewrite.
+echo "--- Scenario C: only start-marker (asymmetric) ---"
+CLAUDE_START_ONLY="$HOME/CLAUDE-start-only.md"
+cat > "$CLAUDE_START_ONLY" <<'EOF'
+# Header
+<!-- synology-manager-plus:managed-start -->
+| host | placeholder |
+## My Important Notes
+This whole section must NOT be deleted.
+EOF
+START_C=$(grep -c '<!-- synology-manager-plus:managed-start -->' "$CLAUDE_START_ONLY" || true)
+END_C=$(grep -c '<!-- synology-manager-plus:managed-end -->' "$CLAUDE_START_ONLY" || true)
+if [ "$START_C" -eq 1 ] && [ "$END_C" -eq 0 ]; then
+  echo "PASS C: asymmetric markers correctly detected (1 start, 0 end) — command must abort"
+else
+  echo "FAIL C: detector miscounted (start=$START_C, end=$END_C)"; exit 1
+fi
+if ! grep -q "This whole section must NOT be deleted" "$CLAUDE_START_ONLY"; then
+  echo "FAIL C: detection step modified the file — must be read-only"
+  exit 1
+fi
+
+# Scenario D: only END marker — also asymmetric, command must refuse.
+echo "--- Scenario D: only end-marker (asymmetric) ---"
+CLAUDE_END_ONLY="$HOME/CLAUDE-end-only.md"
+cat > "$CLAUDE_END_ONLY" <<'EOF'
+# Header
+Some content above
+<!-- synology-manager-plus:managed-end -->
+Trailing content
+EOF
+START_D=$(grep -c '<!-- synology-manager-plus:managed-start -->' "$CLAUDE_END_ONLY" || true)
+END_D=$(grep -c '<!-- synology-manager-plus:managed-end -->' "$CLAUDE_END_ONLY" || true)
+if [ "$START_D" -eq 0 ] && [ "$END_D" -eq 1 ]; then
+  echo "PASS D: asymmetric markers correctly detected (0 start, 1 end) — command must abort"
+else
+  echo "FAIL D: detector miscounted (start=$START_D, end=$END_D)"; exit 1
+fi
 
 echo "=== test-first-run: ALL PASS ==="
 ```
@@ -2130,6 +2233,16 @@ done
 CONTAINER_NAME="mock-nas-runner-$$"
 IMAGE_NAME="mock-nas:test-$$"
 
+# Define cleanup BEFORE any docker operation. If `docker build` or `docker run`
+# fails (port collision, daemon hiccup, broken image), set -e exits — and we
+# still want the half-built image and any half-started container removed.
+cleanup() {
+  echo "[run-all] Cleanup: stopping mock-nas"
+  docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rmi "$IMAGE_NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 # Generate a fresh random password for the test container on every run.
 # It is passed to docker build via --build-arg and exported so child test
 # scripts can read it from $NAS_TEST_PASSWORD. Nothing is hardcoded.
@@ -2142,13 +2255,6 @@ docker build --build-arg NAS_TEST_PASSWORD="$NAS_TEST_PASSWORD" \
 
 echo "[run-all] Starting mock-nas container"
 docker run -d --rm --name "$CONTAINER_NAME" -p 12222:2222 "$IMAGE_NAME" >/dev/null
-
-cleanup() {
-  echo "[run-all] Stopping mock-nas"
-  docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker rmi "$IMAGE_NAME" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
 
 for i in $(seq 1 15); do
   if nc -z -w1 localhost 12222 2>/dev/null; then
