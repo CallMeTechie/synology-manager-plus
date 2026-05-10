@@ -7,7 +7,7 @@ This repository is your workspace for managing a Synology NAS via Claude Code. I
 ## Quick Reference
 
 | Field | Value |
-|-------|-------|
+| - | - |
 | NAS Host (LAN/WAN) | _not configured_ |
 | SSH Port | _not configured_ |
 | SSH User | _not configured_ |
@@ -39,7 +39,7 @@ If the Quick Reference above shows `_not configured_`, run `/first-run` to popul
 ## Available Commands
 
 | Command | Description |
-|---------|-------------|
+| - | - |
 | `/first-run` | Interactive setup wizard |
 | `/setup-ssh` | Generate keypair and walk through key deployment |
 | `/diag` | Health check (7 points) |

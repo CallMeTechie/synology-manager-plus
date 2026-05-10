@@ -18,7 +18,9 @@ Print: "Setting up your Synology NAS workspace. I'll ask a few questions, deploy
 Read `context/nas-profile.md`. If the file shows real values (not `_not configured_`), ask via `AskUserQuestion`:
 
 > "Profile already exists for `<host>:<port>` (user `<user>`). What now?"
+>
 > Options:
+>
 > - "Refresh — re-discover and overwrite managed sections"
 > - "Cancel — keep current profile"
 
@@ -125,7 +127,9 @@ done
 Use `AskUserQuestion` with `multiSelect: true`:
 
 > "Which categories should the plugin be authorized to perform?"
+>
 > Options:
+>
 > - "Volume management"
 > - "Mount configuration"
 > - "File operations"
