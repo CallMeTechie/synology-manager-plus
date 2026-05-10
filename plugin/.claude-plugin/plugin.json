@@ -1,0 +1,8 @@
+{
+  "name": "synology-manager-plus",
+  "version": "0.2.0",
+  "description": "Workspace plugin for Synology NAS management. Fork of synology-manager with fixed installation, automated SSH setup, and /diag health-check.",
+  "author": { "name": "Marc Backes", "url": "https://github.com/CallMeTechie" },
+  "license": "MIT",
+  "keywords": ["synology", "nas", "sysadmin", "storage", "ssh"]
+}
