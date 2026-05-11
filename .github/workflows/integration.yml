@@ -9,7 +9,7 @@ jobs:
   mock-nas-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install test deps
         run: |
@@ -21,7 +21,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: integration-logs
           path: tests/integration/logs/
