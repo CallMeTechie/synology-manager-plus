@@ -3,6 +3,29 @@
 All notable changes to synology-manager-plus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — 2026-05-12
+
+### Added
+
+- `/smart-status` command — SMART health per disk with pass/warn/critical verdict (text-parsing for smartctl 6.5, no JSON).
+- `/health-summary` command — one-page aggregate (RAID, capacity, disk temperatures, memory, load, recent critical log entries). Read-only.
+- `/logs` command — filterable log viewer for DSM system, ssh, package, and docker sources. Supports `--source`, `--last`, `--grep`, `--all-levels` flags via deterministic bash arg-parser.
+- `/dsm-update-check` command — read-only DSM update status check. Maps DSM status-code constants (UPGRADE_*) to update-available/up-to-date/check-failed. Never auto-installs.
+- Lazy profile-migration in `/health-summary` — auto-adds `cpu_cores` field to existing `nas-profile.md` files (atomic awk+mv pattern, idempotent).
+- Four new optional `nas-profile.md` fields: `cpu_cores`, `disk_warn_temp_c`, `disk_critical_temp_c`, `smartctl_device_type` (all default sensibly when missing/placeholder).
+- Mock-NAS extensions: smartctl 6.5 text-format stub with three disk profiles (healthy/warning/critical), stub log files, synoupgrade state-switchable stub.
+- Four new bash-smoke tests in CI, total now 10/10 in `run-all.sh`.
+
+### Changed
+
+- Mock-NAS container now reacts to `MOCK_SYNOUPGRADE_STATE` env var for `synoupgrade --check` behavior selection (default: "new" / update-available).
+
+### Pre-Implementation Notes
+
+- Phase 2 design was verified against real DS218+ hardware (DSM 7.3.1-86003 + smartctl 6.5) before the plan was written. Mock-NAS smartctl profiles are derived from real `smartctl -d ata -a /dev/sda` output, redacted of disk serial numbers.
+
+---
+
 ## [0.2.0] — 2026-05-10
 
 ### Added
