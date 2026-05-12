@@ -99,3 +99,25 @@ cat > /var/log/synopkg.log <<'PKG_EOF'
 2026-05-08T03:00:15 [INFO] Updated Container Manager from 23.1.0 to 23.1.1
 2026-05-10T03:00:08 [INFO] No new updates available
 PKG_EOF
+
+# Phase 2: synoupgrade Mock — emuliert DSM 7.3.1 Verhalten
+# Real-Output: "UPGRADE_CHECKNEWDSM" + exit 255 (beobachtet)
+mkdir -p /usr/syno/sbin
+cat > /usr/syno/sbin/synoupgrade <<'SYNO_EOF'
+#!/usr/bin/env bash
+case "$1" in
+  --check)
+    case "${MOCK_SYNOUPGRADE_STATE:-new}" in
+      new)         echo "UPGRADE_CHECKNEWDSM"; exit 255 ;;
+      up-to-date)  echo "UPGRADE_HAS_NO_NEW_DSM"; exit 0 ;;
+      failed)      echo "UPGRADE_CHECKNEWDSM_FAILED"; exit 1 ;;
+      *)           echo "UPGRADE_UNKNOWN_STATE_$MOCK_SYNOUPGRADE_STATE"; exit 2 ;;
+    esac
+    ;;
+  *)
+    echo "synoupgrade mock: only --check is implemented" >&2
+    exit 1
+    ;;
+esac
+SYNO_EOF
+chmod +x /usr/syno/sbin/synoupgrade
