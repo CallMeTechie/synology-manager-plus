@@ -40,6 +40,10 @@ claude plugin install synology-manager-plus@synology-manager-plus
 |`/nas-status`|Disk usage, RAID, services, load|
 |`/list-shares`|List shared folders, refresh volume snapshots|
 |`/manage-mounts`|View/add/remove NFS or SMB mounts|
+|`/smart-status`|SMART health per disk (text-parsing, smartctl 6.5)|
+|`/health-summary`|One-page NAS health aggregate|
+|`/logs`|Filterable log viewer (system/ssh/package/docker)|
+|`/dsm-update-check`|Read-only DSM update status|
 
 ## Migration from `danielrosehill/synology-manager-plugin`
 
@@ -62,20 +66,30 @@ Check `connect_timeout_seconds` in `context/nas-profile.md`. Default is 10. For 
 **Re-running `/first-run` deleted my notes in `CLAUDE.md`.**
 Notes outside the `<!-- synology-manager-plus:managed-start -->` and `:managed-end` markers are protected. If your CLAUDE.md does not have those markers (e.g. migrated from upstream), `/first-run` shows you a diff and asks before touching anything.
 
-## Roadmap (Phase 2+)
+## Roadmap
 
-- Docker container management (list, start/stop, logs)
-- Hyper Backup job status and trigger
-- BTRFS snapshot management
-- SMART disk health (`smartctl`)
+### Phase 3 — Docker & Operations
+
+- Docker container management (list, start/stop, logs, update)
+- Package management (synopkg-Wrapper)
+
+### Phase 4 — Backup & Snapshots
+
+- BTRFS snapshot management (list, create, restore)
+- Hyper Backup integration (Phase 6 — requires DSM Web API)
+
+### Phase 5 — Security & Audit
+
 - WireGuard / VPN status
-- DSM update check
 - User and permissions management
-- Synology packages (`synopkg`)
-- Logs viewer
-- Power management (Wake-on-LAN, schedule)
+- Failed-login audit, active sessions, security scan
 
-Each will land as its own spec under `docs/superpowers/specs/`.
+### Phase 6+ — DSM Web API Layer
+
+- SID-based auth + 2FA awareness
+- Hyper Backup status/trigger, snapshot replication, app permissions
+
+Each phase lands as its own spec under `docs/superpowers/specs/`.
 
 ## License
 
