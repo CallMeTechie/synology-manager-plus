@@ -101,9 +101,15 @@ echo ""
 
 BEFORE=$("${SSH[@]}" "sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' ps --format json" || echo "")
 
+# Capture exit code without 'set -e' aborting. The `|| true` trick would
+# always yield exit 0, making the failure-branch unreachable; instead
+# use an if-let pattern that keeps $? meaningful.
 # shellcheck disable=SC2029
-PULL_UP_OUT=$("${SSH[@]}" "sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ENV_FLAG pull && sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ENV_FLAG up -d 2>&1" || true)
-PULL_UP_EXIT=$?
+if PULL_UP_OUT=$("${SSH[@]}" "sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ENV_FLAG pull && sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ENV_FLAG up -d 2>&1"); then
+  PULL_UP_EXIT=0
+else
+  PULL_UP_EXIT=$?
+fi
 
 echo "--- raw compose pull + up -d output ---"
 echo "$PULL_UP_OUT"

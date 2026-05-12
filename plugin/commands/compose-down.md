@@ -146,9 +146,13 @@ else
   ACTION="stop"
 fi
 
+# Capture exit code without `set -e` aborting prematurely.
 # shellcheck disable=SC2029
-"${SSH[@]}" "sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ACTION 2>&1"
-EXIT_CODE=$?
+if "${SSH[@]}" "sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ACTION 2>&1"; then
+  EXIT_CODE=0
+else
+  EXIT_CODE=$?
+fi
 
 if [ $EXIT_CODE -ne 0 ]; then
   echo "ERROR: 'docker compose $ACTION' failed (exit $EXIT_CODE)." >&2

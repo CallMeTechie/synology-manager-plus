@@ -116,9 +116,14 @@ if [ "$ENV_EXISTS" = "yes" ]; then
   ENV_FLAG="--env-file $ENV_PATH"
 fi
 
+# Capture exit code without `set -e` aborting. A bare SSH call would
+# abort the script before we could format a useful error message.
 # shellcheck disable=SC2029
-"${SSH[@]}" "sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ENV_FLAG up -d 2>&1"
-UP_EXIT=$?
+if "${SSH[@]}" "sudo -n /usr/local/bin/docker compose -f '$CONFIG_FILE' $ENV_FLAG up -d 2>&1"; then
+  UP_EXIT=0
+else
+  UP_EXIT=$?
+fi
 
 if [ $UP_EXIT -ne 0 ]; then
   echo "ERROR: 'docker compose up -d' failed (exit $UP_EXIT)." >&2
