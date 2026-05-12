@@ -4,7 +4,7 @@ A Claude Code plugin for managing a Synology NAS via SSH. Ten commands for setup
 
 **This is a fork** of [`danielrosehill/synology-manager-plugin`](https://github.com/danielrosehill/synology-manager-plugin). The fork addresses three blockers in the upstream v0.1.0 and grows the command set across phases. Original credit to Daniel Rosehill.
 
-**Latest version:** v0.3.0 (Phase 2 — Health & Watch). Verified against DSM 7.3.1-86003 on a DS218+.
+**Latest version:** v0.4.0 (Phase 3 — Docker & Operations). Verified against DSM 7.3.1-86003 on a DS218+.
 
 ## What's different from the original
 
@@ -20,7 +20,8 @@ A Claude Code plugin for managing a Synology NAS via SSH. Ten commands for setup
 |SSH key|Used `~/.ssh/id_ed25519`, conflicted with user keys|Plugin-owned `~/.ssh/synology-manager-plus_ed25519`|
 |Connect timeout|Hard-coded 5s, broke on WAN/VPN|Default 10s, configurable per-profile|
 |User notes in CLAUDE.md|Could be overwritten by `/first-run` re-run|Protected via managed-section markers|
-|Tests|None|Static checks + 10 Mock-NAS smoke tests in CI|
+|Tests|None|Static checks + 18 Mock-NAS smoke tests + 1 unit test in CI|
+|Docker management|Absent|6 /compose-* and /docker-list commands (SSH + sudoers Drop-in for /usr/local/bin/docker)|
 
 ## Installation
 
@@ -49,6 +50,12 @@ claude plugin install synology-manager-plus@synology-manager-plus
 |`/health-summary`|One-page NAS health aggregate|
 |`/logs`|Filterable log viewer (system/ssh/package/docker)|
 |`/dsm-update-check`|Read-only DSM update status|
+|`/compose-list`|List all Compose projects (running + stopped)|
+|`/docker-list`|Flat container listing with Compose-label awareness|
+|`/compose-logs`|Filter-able Compose-Logs-Viewer|
+|`/compose-up`|Start a stopped Compose stack|
+|`/compose-down`|Stop a Compose stack (with critical-project whitelist)|
+|`/compose-update`|Pull + restart a Compose stack atomically|
 
 ## Migration from `danielrosehill/synology-manager-plugin`
 
@@ -95,12 +102,86 @@ The DSM default user is not in the `docker` group. The plugin shows the same two
 **`/dsm-update-check` says "Status: UNKNOWN".**
 Synology can change `synoupgrade --check` status-code constants without notice. The plugin fails loud with the raw status code and the first 200 chars of output instead of silently mapping to "up-to-date" — that would risk missed security updates. Open DSM Web UI → Control Panel → Update & Restore to verify manually, and (if you have time) open an issue with the unknown code so I can extend the mapping.
 
+**`/compose-list` says "passwordless sudo for /usr/local/bin/docker is not configured".**
+DSM has no `docker` group pre-created, so the plugin uses a sudoers
+drop-in like Phase 2 (smartctl, synoupgrade). Install once:
+
+```bash
+ssh your-nas
+echo "$USER ALL=(ALL) NOPASSWD: /usr/local/bin/docker" | \
+  sudo tee /etc/sudoers.d/synology-manager-plus-docker
+sudo chmod 0440 /etc/sudoers.d/synology-manager-plus-docker
+```
+
+For DSM users already in `administrators` (which is `(ALL) ALL`),
+the NOPASSWD override only adds **passwordless** access for docker —
+it does not expand what the user could already do.
+
+**`/compose-update` aborts with ".env unreadable".**
+On DSM, Compose projects created via Container-Manager UI sometimes
+leave the `.env` as `root:root` mode `600`. The plugin fails loud
+rather than letting Compose silently substitute `${VARS}` to empty
+strings. Fix:
+
+```bash
+ssh your-nas
+sudo chmod 0640 /volume1/docker/<project>/.env
+sudo chown :docker /volume1/docker/<project>/.env
+```
+
+**`/compose-down` won't stop my project even with `<project>` argument.**
+The project is in `critical_compose_projects` whitelist. Either remove
+it from `context/nas-profile.md`, or invoke with
+`SM_CONFIRM_CRITICAL=yes` as an environment variable. Critical projects
+are protected from accidental `down`.
+
+**`docker compose pull` fails for one of my services.**
+If a service has `build:` instead of `image:`, Compose's `pull` returns
+non-zero. `/compose-update` aborts before `up -d` runs. For build-based
+services, run manually:
+
+```bash
+ssh your-nas
+cd /volume1/docker/<project> && docker compose build && docker compose up -d
+```
+
+**`/compose-up <project>` says "not found" after I used `/compose-down --remove`.**
+`--remove` runs `docker compose down` which deletes containers + network
++ removes the project from the Compose index. The plugin then can't
+discover it. To restart, run one manual command — afterwards the plugin
+re-discovers it:
+
+```bash
+ssh your-nas
+sudo -n /usr/local/bin/docker compose -f /volume1/docker/<project>/docker-compose.yml up -d
+```
+
+The default `/compose-down` (without `--remove`) avoids this — it uses
+`compose stop`, so the project stays in the index as `exited` and
+`/compose-up` works immediately.
+
+**My NAS disk is filling up after many `/compose-down`/`/compose-up` cycles.**
+The default `compose stop` keeps container writable layers, logs, and
+networks for fast restart. Periodically clean up unused artifacts:
+
+```bash
+ssh your-nas
+sudo -n /usr/local/bin/docker system prune    # removes stopped containers + unused networks
+sudo -n /usr/local/bin/docker image prune     # removes dangling images
+```
+
+(The plugin does not auto-clean — explicit user action only.)
+
 ## Roadmap
 
-### Phase 3 — Docker & Operations
+### Phase 3 — Docker & Operations  ✅ shipped in v0.4.0
 
-- Docker container management (list, start/stop, logs, update)
-- Package management (synopkg-Wrapper)
+- `/compose-list` — overview of all Compose projects
+- `/compose-up` — start a stopped stack
+- `/compose-down` — stop a stack (with critical-project protection)
+- `/compose-update` — pull + restart atomically
+- `/compose-logs` — filtered Compose-Logs viewer
+- `/docker-list` — flat container listing with Compose tagging
 
 ### Phase 4 — Backup & Snapshots
 
