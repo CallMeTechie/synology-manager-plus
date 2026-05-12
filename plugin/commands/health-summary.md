@@ -1,5 +1,5 @@
 ---
-description: One-page NAS health summary — RAID, capacity, disk temperatures, memory, load, last 24h critical log entries. Read-only.
+description: One-page NAS health summary — RAID, capacity, disk temperatures, memory, load, last 24h critical log entries. Lazy profile migration writes cpu_cores on first call.
 allowed-tools: Bash, Read, Write, Edit
 ---
 
@@ -130,6 +130,11 @@ if [ "$DF_PERCENT" -gt 90 ] 2>/dev/null; then STORAGE_MARK="critical"; OVERALL="
 elif [ "$DF_PERCENT" -gt 80 ] 2>/dev/null; then STORAGE_MARK="warn"; [ "$OVERALL" = "ok" ] && OVERALL="warn"
 fi
 
+RAID_MARK="ok"
+if echo "$RAID_OUT" | grep -qE "(degraded|recovering|rebuilding|faulty|resync)"; then
+  RAID_MARK="critical"; OVERALL="critical"
+fi
+
 DISK_MARK="ok"
 for t in $(echo "$DISK_TEMP_OUT" | grep -oE "[0-9]+C" | grep -oE "[0-9]+"); do
   if [ "$t" -gt "$DISK_CRITICAL_TEMP" ] 2>/dev/null; then DISK_MARK="critical"; OVERALL="critical"
@@ -149,7 +154,7 @@ echo "NAS Health Summary — ${TS}  (${HOSTNAME_VAL:-?}, DSM ${DSM_VERSION:-?})"
 echo "===================================================================="
 echo ""
 echo "Storage:    volume1 ${DF_PERCENT}% used  [${STORAGE_MARK}]"
-echo "RAID:       $(echo "$RAID_OUT" | grep -E "^md" | head -3 | tr '\n' ' ')"
+echo "RAID:       $(echo "$RAID_OUT" | grep -E "^md" | head -3 | tr '\n' ' ')  [${RAID_MARK}]"
 echo "Disks:      ${DISK_TEMP_OUT}[${DISK_MARK}]"
 echo "Memory:     ${MEM_OUT}"
 echo "Load:       $(echo "$LOAD_OUT" | grep -oE "load average:.*") [${LOAD_MARK}]"
