@@ -3,6 +3,32 @@
 All notable changes to synology-manager-plus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-05-12
+
+### Added
+- `/compose-list` — read-only Compose-project overview
+- `/compose-up [project]` — start a stopped stack
+- `/compose-down <project>` — stop a stack, protected by
+  `critical_compose_projects` whitelist
+- `/compose-update <project>` — pull + restart in single SSH roundtrip
+  with `&&`-chain (best-effort atomicity), JSON-diff verdict
+- `/compose-logs <project>` — Compose-Logs-Viewer with tail/since/service
+  filters
+- `/docker-list` — flat container listing with Compose-label awareness
+- `critical_compose_projects` profile field with lazy migration
+- Pure-bash unit test for the critical-project predicate (no SSH)
+- Mock-NAS docker + docker-compose stubs with daemon-state controls
+
+### Security
+- Plugin uses sudoers Drop-in for /usr/local/bin/docker (DSM has no
+  pre-created docker-group; for users already in administrators with
+  `(ALL) ALL`, the NOPASSWD override is a usability win, not a
+  privilege expansion)
+- Fail-loud on unreadable `.env` (Compose's silent variable-empty
+  substitution would break stacks)
+- `/compose-down` refuses to stop critical projects without explicit
+  confirmation (`SM_CONFIRM_CRITICAL=yes`)
+
 ## [0.3.0] — 2026-05-12
 
 ### Added
