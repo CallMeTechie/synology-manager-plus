@@ -65,6 +65,11 @@ TESTS=(
   test-nas-status.sh
   test-list-shares.sh
   test-manage-mounts.sh
+  # Phase 2:
+  test-smart-status.sh
+  test-health-summary.sh
+  test-logs.sh
+  test-dsm-update-check.sh
 )
 
 mkdir -p "$SCRIPT_DIR/logs"
