@@ -10,12 +10,13 @@ FROM alpine:3
 # baked into the image.
 ARG NAS_TEST_PASSWORD
 
-RUN apk add --no-cache openssh-server bash coreutils sudo shadow \
+RUN apk add --no-cache openssh-server bash coreutils sudo shadow jq \
     && ssh-keygen -A \
     && adduser -D -s /bin/bash nas-test \
     && [ -n "$NAS_TEST_PASSWORD" ] || (echo "Build requires --build-arg NAS_TEST_PASSWORD" >&2; exit 1) \
     && printf 'nas-test:%s\n' "$NAS_TEST_PASSWORD" | chpasswd \
     && echo 'nas-test ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/nas-test \
+    && echo 'Defaults env_keep += "MOCK_DOCKER_DAEMON_STATE MOCK_COMPOSE_PROJECTS MOCK_COMPOSE_PS MOCK_COMPOSE_PS_PROJECT MOCK_COMPOSE_PULL_RESULT"' >> /etc/sudoers.d/nas-test \
     && chmod 0440 /etc/sudoers.d/nas-test \
     && mkdir -p /home/nas-test/.ssh \
     && chown nas-test:nas-test /home/nas-test/.ssh \
