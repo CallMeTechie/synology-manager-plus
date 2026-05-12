@@ -107,9 +107,13 @@ cat > /usr/syno/sbin/synoupgrade <<'SYNO_EOF'
 #!/usr/bin/env bash
 case "$1" in
   --check)
-    case "${MOCK_SYNOUPGRADE_STATE:-new}" in
-      new)         echo "UPGRADE_CHECKNEWDSM"; exit 255 ;;
-      up-to-date)  echo "UPGRADE_HAS_NO_NEW_DSM"; exit 0 ;;
+    # Default changed: real DSM 7.3.1-86003 returns UPGRADE_CHECKNEWDSM
+    # to mean "check completed, no update available" (verified against
+    # Marc's DS218+, latest DSM release). Mock now mirrors that:
+    # default state is "up-to-date" returning UPGRADE_CHECKNEWDSM.
+    case "${MOCK_SYNOUPGRADE_STATE:-up-to-date}" in
+      new)         echo "UPGRADE_HAS_NEW_DSM"; exit 0 ;;
+      up-to-date)  echo "UPGRADE_CHECKNEWDSM"; exit 255 ;;
       failed)      echo "UPGRADE_CHECKNEWDSM_FAILED"; exit 1 ;;
       *)           echo "UPGRADE_UNKNOWN_STATE_$MOCK_SYNOUPGRADE_STATE"; exit 2 ;;
     esac

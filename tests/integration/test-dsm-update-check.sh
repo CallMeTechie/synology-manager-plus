@@ -25,16 +25,17 @@ echo "--- Scenario A: update available ---"
 OUT_A=$(run_check "new")
 STATUS_A=$(echo "$OUT_A" | head -1 | awk '{print $1}')
 case "$STATUS_A" in
-  UPGRADE_HAS_NEW_DSM|UPGRADE_CHECKNEWDSM) echo "PASS A: status '$STATUS_A' mapped to update-available" ;;
-  *) echo "FAIL A: expected NEWDSM, got '$STATUS_A'"; exit 1 ;;
+  UPGRADE_HAS_NEW_DSM) echo "PASS A: status '$STATUS_A' mapped to update-available" ;;
+  *) echo "FAIL A: expected UPGRADE_HAS_NEW_DSM, got '$STATUS_A'"; exit 1 ;;
 esac
 
 echo "--- Scenario B: up-to-date ---"
 OUT_B=$(run_check "up-to-date")
 STATUS_B=$(echo "$OUT_B" | head -1 | awk '{print $1}')
+# UPGRADE_CHECKNEWDSM is the empirically-observed code on DSM 7.3.1-86003 for "no update".
 case "$STATUS_B" in
-  UPGRADE_HAS_NO_NEW_DSM|UPGRADE_UP_TO_DATE) echo "PASS B: status '$STATUS_B' mapped to up-to-date" ;;
-  *) echo "FAIL B: expected NO_NEW, got '$STATUS_B'"; exit 1 ;;
+  UPGRADE_CHECKNEWDSM|UPGRADE_HAS_NO_NEW_DSM|UPGRADE_UP_TO_DATE) echo "PASS B: status '$STATUS_B' mapped to up-to-date" ;;
+  *) echo "FAIL B: expected up-to-date status code, got '$STATUS_B'"; exit 1 ;;
 esac
 
 echo "--- Scenario C: check-failed ---"

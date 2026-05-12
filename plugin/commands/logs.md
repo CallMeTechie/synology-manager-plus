@@ -78,13 +78,30 @@ SSH=( ssh -i "$HOME/.ssh/synology-manager-plus_ed25519" -o ConnectTimeout="$CONN
 
 case "$source" in
   system)
-    RAW=$("${SSH[@]}" "tail -n 1000 /var/log/messages /var/log/synolog/synolog.cur 2>/dev/null" || echo "")
+    # /var/log/messages is root:log mode 660 on DSM; /var/log/synolog/* is
+    # often root-only. We capture stderr so a permission denial surfaces
+    # with a concrete remediation instead of an empty output.
+    RAW=$("${SSH[@]}" "tail -n 1000 /var/log/messages /var/log/synolog/synolog.cur 2>&1" || echo "")
+    if echo "$RAW" | grep -qi "permission denied"; then
+      echo "ERROR: cannot read DSM system logs as user '$NAS_USER' — these files are root:log on DSM." >&2
+      echo "Two options to enable /logs --source=system:" >&2
+      echo "  (A) Add user to 'log' group (cleaner, no broad sudo grant):" >&2
+      echo "      ssh $NAS_USER@$HOST 'sudo synogroup --member add log $NAS_USER'" >&2
+      echo "      Log out / back in to refresh group membership." >&2
+      echo "  (B) Extend plugin sudoers drop-in for tail (broader scope):" >&2
+      echo "      echo '$NAS_USER ALL=(ALL) NOPASSWD: /usr/bin/tail' | sudo tee -a /etc/sudoers.d/synology-manager-plus" >&2
+      exit 1
+    fi
     ;;
   ssh)
     RAW=$("${SSH[@]}" "test -f /var/log/auth.log && tail -n 500 /var/log/auth.log || journalctl -u sshd --no-pager 2>/dev/null | tail -500 || echo 'no auth.log or journal'" 2>/dev/null || echo "no auth.log or journal")
     ;;
   package)
-    RAW=$("${SSH[@]}" "tail -n 500 /var/log/synopkg.log 2>/dev/null" || echo "")
+    RAW=$("${SSH[@]}" "tail -n 500 /var/log/synopkg.log 2>&1" || echo "")
+    if echo "$RAW" | grep -qi "permission denied"; then
+      echo "ERROR: cannot read /var/log/synopkg.log — same group/sudo options apply as --source=system." >&2
+      exit 1
+    fi
     ;;
   docker)
     CONTAINERS=$("${SSH[@]}" "docker ps --format '{{.Names}}' 2>/dev/null | head -10" || echo "")

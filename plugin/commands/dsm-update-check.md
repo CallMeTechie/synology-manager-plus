@@ -60,10 +60,14 @@ OUT=$("${SSH[@]}" "sudo -n /usr/syno/sbin/synoupgrade --check 2>&1")
 STATUS=$(echo "$OUT" | head -1 | awk '{print $1}')
 
 case "$STATUS" in
-  UPGRADE_HAS_NEW_DSM|UPGRADE_CHECKNEWDSM)
+  UPGRADE_HAS_NEW_DSM)
     STATE="update-available"
     ;;
-  UPGRADE_HAS_NO_NEW_DSM|UPGRADE_UP_TO_DATE)
+  UPGRADE_CHECKNEWDSM|UPGRADE_HAS_NO_NEW_DSM|UPGRADE_UP_TO_DATE)
+    # UPGRADE_CHECKNEWDSM was empirically verified against a DSM 7.3.1-86003
+    # Update 1 install (latest at the time of Phase-2 release; DSM Web UI
+    # showed no available update). The literal name "check new DSM" is
+    # misleading — it actually means "check was performed, no new DSM found".
     STATE="up-to-date"
     ;;
   UPGRADE_CHECKNEWDSM_FAILED)
