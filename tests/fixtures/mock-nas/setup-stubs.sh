@@ -125,3 +125,142 @@ case "$1" in
 esac
 SYNO_EOF
 chmod +x /usr/syno/sbin/synoupgrade
+
+# Phase 3: docker + docker-compose Mock
+# State per env var, default "up". Daemon-Pre-Check classification
+# uses stderr output patterns identical to a real docker client.
+mkdir -p /var/lib/mock-docker
+cat > /usr/local/bin/docker <<'DOCKER_EOF'
+#!/usr/bin/env bash
+state="${MOCK_DOCKER_DAEMON_STATE:-up}"
+
+case "$1" in
+  info)
+    case "$state" in
+      up)
+        echo "24.0.2"
+        exit 0
+        ;;
+      down)
+        echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+        exit 1
+        ;;
+      noperm)
+        # Mocks the case where sudoers is not configured. Real
+        # sudo output is "sudo: a password is required" on stderr.
+        echo "sudo: a password is required" >&2
+        exit 1
+        ;;
+      *)
+        echo "mock-docker: unknown MOCK_DOCKER_DAEMON_STATE=$state" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  compose)
+    shift
+    config_file=""
+    project_override=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) config_file="$2"; shift 2 ;;
+        -p) project_override="$2"; shift 2 ;;
+        --env-file) shift 2 ;;
+        *) break ;;
+      esac
+    done
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      ls)
+        if [[ "$*" == *--format*json* ]]; then
+          if [ -n "${MOCK_COMPOSE_PROJECTS:-}" ]; then
+            echo "$MOCK_COMPOSE_PROJECTS"
+          else
+            cat <<'LS_EOF'
+[{"Name":"healthy-stack","Status":"running(3)","ConfigFiles":"/srv/compose/healthy/docker-compose.yml"},{"Name":"partial-stack","Status":"running(1)","ConfigFiles":"/srv/compose/partial/docker-compose.yml"},{"Name":"stopped-stack","Status":"exited(0)","ConfigFiles":"/srv/compose/stopped/docker-compose.yml"}]
+LS_EOF
+          fi
+        else
+          echo "NAME             STATUS         CONFIG FILES"
+          echo "healthy-stack    running(3)     /srv/compose/healthy/docker-compose.yml"
+          echo "partial-stack    running(1)     /srv/compose/partial/docker-compose.yml"
+          echo "stopped-stack    exited(0)      /srv/compose/stopped/docker-compose.yml"
+        fi
+        exit 0
+        ;;
+      ps)
+        if [[ "$*" == *--format*json* ]]; then
+          if [ -n "${MOCK_COMPOSE_PS:-}" ]; then
+            # Pass-through: caller can inject any array literal
+            printf '%s\n' "$MOCK_COMPOSE_PS"
+          else
+            case "${project_override:-${MOCK_COMPOSE_PS_PROJECT:-healthy}}" in
+              healthy*)
+                # JSON array (Compose v2.20.1 behavior). Fields mirror real
+                # output: ID, Name, Image, Project, Service, State, Status, Health.
+                echo '[{"ID":"abc1","Name":"healthy-stack-web-1","Image":"nginx:alpine","Project":"healthy-stack","Service":"web","State":"running","Status":"Up 1h (healthy)","Health":"healthy"},{"ID":"abc2","Name":"healthy-stack-db-1","Image":"postgres:16","Project":"healthy-stack","Service":"db","State":"running","Status":"Up 1h (healthy)","Health":"healthy"},{"ID":"abc3","Name":"healthy-stack-cache-1","Image":"redis:7-alpine","Project":"healthy-stack","Service":"cache","State":"running","Status":"Up 1h","Health":""}]'
+                ;;
+              partial*)
+                echo '[{"ID":"def1","Name":"partial-stack-web-1","Image":"nginx:alpine","Project":"partial-stack","Service":"web","State":"running","Status":"Up 1h","Health":""},{"ID":"def2","Name":"partial-stack-worker-1","Image":"busybox:latest","Project":"partial-stack","Service":"worker","State":"exited","Status":"Exited (0) 5m ago","Health":""}]'
+                ;;
+              stopped*)
+                echo '[]'
+                ;;
+            esac
+          fi
+        else
+          echo "NAME                    SERVICE     STATUS"
+        fi
+        exit 0
+        ;;
+      up)
+        echo "[mock] compose up -d ok" >&2
+        exit 0
+        ;;
+      stop)
+        echo "[mock] compose stop ok" >&2
+        exit 0
+        ;;
+      down)
+        echo "[mock] compose down ok" >&2
+        exit 0
+        ;;
+      pull)
+        case "${MOCK_COMPOSE_PULL_RESULT:-up-to-date}" in
+          up-to-date) echo "[mock] all images already up to date" ;;
+          updated)    echo "[mock] pulled new images" ;;
+          fail)       echo "[mock] pull failed: registry unreachable" >&2; exit 1 ;;
+        esac
+        exit 0
+        ;;
+      logs)
+        echo "web-1  | 2026-05-12T12:00:00Z INFO  startup ok"
+        echo "web-1  | 2026-05-12T12:00:01Z INFO  ready"
+        echo "db-1   | 2026-05-12T12:00:00Z INFO  pg starting"
+        echo "db-1   | 2026-05-12T12:00:02Z INFO  pg ready"
+        exit 0
+        ;;
+      *)
+        echo "mock compose: unhandled subcommand '$sub'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  ps)
+    if [[ "$*" == *--format*com.docker.compose.project* ]]; then
+      printf 'healthy-stack-web-1\tnginx:alpine\tUp 1h\thealthy-stack\n'
+      printf 'healthy-stack-db-1\tpostgres:16\tUp 1h\thealthy-stack\n'
+      printf 'standalone-redis\tredis:7-alpine\tUp 30m\t\n'
+    else
+      echo "CONTAINER ID   IMAGE          STATUS"
+      echo "abc123         nginx:alpine   Up 1h"
+    fi
+    exit 0
+    ;;
+  *)
+    echo "mock docker: unhandled top-level arg '$1'" >&2
+    exit 1
+    ;;
+esac
+DOCKER_EOF
+chmod +x /usr/local/bin/docker
