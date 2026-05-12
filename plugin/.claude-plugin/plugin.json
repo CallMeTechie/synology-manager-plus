@@ -1,8 +1,8 @@
 {
   "name": "synology-manager-plus",
-  "version": "0.3.0",
-  "description": "Workspace plugin for Synology NAS management. SSH-based commands for setup, diagnostics, storage, SMART health, system logs, and DSM update monitoring.",
+  "version": "0.4.0",
+  "description": "Workspace plugin for Synology NAS management. SSH-based commands for setup, diagnostics, storage, SMART health, system logs, DSM update monitoring, and Docker Compose operations.",
   "author": { "name": "Marc Backes", "url": "https://github.com/CallMeTechie" },
   "license": "MIT",
-  "keywords": ["synology", "nas", "sysadmin", "storage", "ssh", "smart", "monitoring"]
+  "keywords": ["synology", "nas", "sysadmin", "storage", "ssh", "smart", "monitoring", "docker", "compose"]
 }
