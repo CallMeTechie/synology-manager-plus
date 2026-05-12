@@ -70,9 +70,33 @@ TESTS=(
   test-health-summary.sh
   test-logs.sh
   test-dsm-update-check.sh
+  # Phase 3:
+  test-compose-list.sh
+  test-docker-list.sh
+  test-compose-logs.sh
+  test-compose-up.sh
+  test-compose-down.sh
+  test-compose-update.sh
+  test-daemon-down.sh
+  test-daemon-noperm.sh
 )
 
 mkdir -p "$SCRIPT_DIR/logs"
+
+UNIT_TESTS_DIR="$(cd "$SCRIPT_DIR/../unit" 2>/dev/null && pwd || echo "")"
+if [ -n "$UNIT_TESTS_DIR" ] && [ -d "$UNIT_TESTS_DIR" ]; then
+  for ut in "$UNIT_TESTS_DIR"/test-*.sh; do
+    [ -f "$ut" ] || continue
+    name=$(basename "$ut")
+    echo "[run-all] Unit: $name"
+    if ! bash "$ut" >"$SCRIPT_DIR/logs/$name.log" 2>&1; then
+      echo "[run-all] FAIL unit: $name (see $SCRIPT_DIR/logs/$name.log)"
+      exit 1
+    fi
+    echo "[run-all] PASS unit: $name"
+  done
+fi
+
 fail_count=0
 for t in "${TESTS[@]}"; do
   log="$SCRIPT_DIR/logs/$t.log"
