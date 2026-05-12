@@ -1,0 +1,6 @@
+services:
+  web:
+    image: nginx:alpine
+  worker:
+    image: busybox:latest
+    command: ["sleep", "0"]
