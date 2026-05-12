@@ -15,7 +15,11 @@ _Populated by `/first-run`. Do not edit by hand — re-run `/first-run` to refre
 - model: _not configured_
 - arch: _not configured_
 - cpu: _not configured_
+- cpu_cores: _not configured_
 - ram: _not configured_
+- disk_warn_temp_c: _not configured_
+- disk_critical_temp_c: _not configured_
+- smartctl_device_type: _not configured_
 
 ## Software
 
