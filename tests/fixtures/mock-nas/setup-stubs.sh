@@ -66,3 +66,36 @@ case "$ARGS" in
 esac
 SMART_EOF
 chmod +x /usr/bin/smartctl
+
+# Phase 2: Stub-Logs für /logs-Command-Tests
+mkdir -p /var/log/synolog
+
+cat > /var/log/messages <<'MSG_EOF'
+May 11 09:01:23 nas3 kernel: [    0.000000] Linux version 4.4.302+
+May 11 09:01:24 nas3 systemd[1]: Started SSH Daemon.
+May 11 10:14:02 nas3 kernel: ata1.00: exception Emask 0x0 SAct 0x0 SErr 0x0 action 0x6 frozen
+May 11 13:45:30 nas3 sshd[2345]: Accepted publickey for nas-test from 10.0.0.5 port 41523 ssh2
+May 11 17:22:45 nas3 docker[3456]: container abc123 started: nextcloud
+May 11 22:18:55 nas3 sshd[5678]: Failed publickey for nas-test from 10.0.0.99 port 53210 ssh2
+May 12 00:30:15 nas3 docker[3456]: container abc123 health check failed
+May 12 00:30:20 nas3 docker[3456]: container abc123 restarting
+May 12 01:15:33 nas3 kernel: md/raid:md2: read error corrected (8 sectors at 12345 on sda3)
+May 12 09:00:00 nas3 docker[3456]: container abc123 critical: out of memory
+May 12 09:15:30 nas3 docker[3456]: container abc123 stopped
+MSG_EOF
+
+cat > /var/log/synolog/synolog.cur <<'SYNO_EOF'
+2026-05-11T09:00:00+02:00 nas3 SYSTEM info: System startup completed
+2026-05-11T10:14:02+02:00 nas3 STORAGE warning: ata1.00 reported transient error
+2026-05-11T22:18:55+02:00 nas3 AUTH warning: Failed SSH login attempt from 10.0.0.99
+2026-05-12T00:30:15+02:00 nas3 DOCKER error: Container abc123 health check failed
+2026-05-12T09:00:00+02:00 nas3 DOCKER critical: Container abc123 out of memory
+SYNO_EOF
+
+cat > /var/log/synopkg.log <<'PKG_EOF'
+2026-04-15T03:00:00 [INFO] Updated Docker from 24.0.2 to 24.0.7
+2026-04-15T03:00:45 [INFO] Updated Hyper Backup from 4.0.1 to 4.0.2
+2026-05-01T03:00:10 [INFO] No new updates available
+2026-05-08T03:00:15 [INFO] Updated Container Manager from 23.1.0 to 23.1.1
+2026-05-10T03:00:08 [INFO] No new updates available
+PKG_EOF
