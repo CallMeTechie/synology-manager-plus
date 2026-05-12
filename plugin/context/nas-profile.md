@@ -27,6 +27,7 @@ _Populated by `/first-run`. Do not edit by hand — re-run `/first-run` to refre
 - hostname: _not configured_
 - docker_available: _not configured_
 - sudo_passwordless: _not configured_
+- critical_compose_projects:
 
 ## Volumes
 
