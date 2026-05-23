@@ -53,4 +53,17 @@ assert_contains "$REPORT" "Disk Usage"
 assert_contains "$REPORT" "Filesystem"
 echo "PASS: storage-report.md populated correctly"
 
+echo "--- Scenario: synoservice resolves via absolute path under DSM-like PATH ---"
+# synoservice lives in /usr/syno/sbin, absent from a non-interactive SSH PATH.
+# Mirror nas-status.md: privileged absolute path first, then unprivileged.
+SVC=$(ssh_mock "export PATH=/usr/bin:/bin; sudo -n /usr/syno/sbin/synoservice --list 2>/dev/null || /usr/syno/sbin/synoservice --list 2>/dev/null || echo 'synoservice not available'" | head -40)
+echo "$SVC" | grep -q "smbd" \
+  || { echo "FAIL: synoservice --list did not return services via absolute path; got '$SVC'"; exit 1; }
+echo "PASS: synoservice resolves via /usr/syno/sbin under DSM-like PATH"
+
+# Negative control: bare 'synoservice' yields nothing here (reproduces the bug).
+BARE=$(ssh_mock "export PATH=/usr/bin:/bin; synoservice --list 2>/dev/null || echo NOT-FOUND")
+assert_eq "NOT-FOUND" "$BARE" "bare 'synoservice' unresolved when /usr/syno/sbin absent"
+echo "PASS (control): bare 'synoservice' unresolvable under DSM-like PATH"
+
 echo "=== test-nas-status: ALL PASS ==="

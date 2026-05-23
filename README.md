@@ -146,8 +146,8 @@ cd /volume1/docker/<project> && docker compose build && docker compose up -d
 ```
 
 **`/compose-up <project>` says "not found" after I used `/compose-down --remove`.**
-`--remove` runs `docker compose down` which deletes containers + network
-+ removes the project from the Compose index. The plugin then can't
+`--remove` runs `docker compose down` which deletes containers + network +
+removes the project from the Compose index. The plugin then can't
 discover it. To restart, run one manual command — afterwards the plugin
 re-discovers it:
 

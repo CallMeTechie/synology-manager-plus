@@ -77,4 +77,22 @@ RC=$?
 [ $RC -eq 0 ] || { echo "FAIL 7b-outer: subshell exited non-zero ($RC)"; exit 1; }
 echo "PASS 7b: even completely unbound ARGUMENTS does not trip set -u"
 
+echo "--- Scenario 8: --source=docker resolves via absolute path (DSM PATH gap) ---"
+# DSM's non-interactive SSH PATH omits /usr/local/bin. Simulate it: the docker
+# log source must reach docker at its absolute path, not by bare name.
+CONTAINERS=$(ssh_mock "export PATH=/usr/bin:/bin; /usr/local/bin/docker ps --format '{{.Names}}' 2>/dev/null | head -10" || echo "")
+echo "$CONTAINERS" | grep -q "healthy-stack-web-1" \
+  || { echo "FAIL 8: absolute-path 'docker ps' did not list expected container; got '$CONTAINERS'"; exit 1; }
+echo "PASS 8: docker ps resolves via /usr/local/bin/docker under DSM-like PATH"
+
+DLOG=$(ssh_mock "export PATH=/usr/bin:/bin; /usr/local/bin/docker logs --tail 100 healthy-stack-web-1 2>&1 | tail -100")
+echo "$DLOG" | grep -qiE 'error|warn' \
+  || { echo "FAIL 8: docker logs produced no filterable (error/warn) lines"; exit 1; }
+echo "PASS 8: docker logs resolves via absolute path and yields filterable output"
+
+# Negative control: bare 'docker ps' yields nothing here (reproduces the bug).
+BARE=$(ssh_mock "export PATH=/usr/bin:/bin; docker ps --format '{{.Names}}' 2>/dev/null | head -10" || echo "")
+[ -z "$BARE" ] || { echo "FAIL 8: bare 'docker ps' unexpectedly resolved — control invalid"; exit 1; }
+echo "PASS 8 (control): bare 'docker ps' yields nothing under DSM-like PATH (bug reproduced)"
+
 echo "=== test-logs: ALL PASS ==="

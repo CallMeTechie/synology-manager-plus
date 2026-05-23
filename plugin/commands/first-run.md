@@ -105,7 +105,11 @@ DF_OUTPUT=$(discover df "df -h")
 # and discover() exempts label 'raid' from the empty-result check.
 RAID_STATUS=$(discover raid "cat /proc/mdstat | head -20 2>/dev/null || echo 'n/a'")
 VOL1_LIST=$(discover vol1 "ls /volume1/")
-DOCKER_OK=$(discover docker "command -v docker >/dev/null && docker --version || echo 'not installed'")
+# DSM installs docker at /usr/local/bin/docker, which is NOT on the PATH of a
+# non-interactive SSH session (/etc/profile is not sourced). Probing the
+# absolute path — not `command -v docker` — is the only reliable detection;
+# all /compose-* commands use the same absolute path.
+DOCKER_OK=$(discover docker "[ -x /usr/local/bin/docker ] && /usr/local/bin/docker --version || echo 'not installed'")
 SUDO_OK=$(discover sudo "sudo -n true 2>/dev/null && echo yes || echo no")
 ```
 

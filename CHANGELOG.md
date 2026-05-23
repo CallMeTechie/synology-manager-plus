@@ -3,9 +3,35 @@
 All notable changes to synology-manager-plus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] — 2026-05-23
+
+### Fixed
+
+- `/first-run` docker discovery and `/logs --source=docker` invoked docker by
+  bare name. On DSM, a non-interactive SSH session does not source
+  `/etc/profile`, so `/usr/local/bin` (where Container Manager installs docker)
+  is not on PATH — discovery wrongly reported `docker_available: not installed`
+  and the docker log source found no containers, even though docker was present
+  at `/usr/local/bin/docker`. Both now use the absolute path, matching every
+  `/compose-*` command. (Reported against DSM 7.3.1.)
+- `/nas-status` invoked `synoservice` by bare name. `synoservice` lives in
+  `/usr/syno/sbin`, also absent from the non-interactive SSH PATH, so the
+  service list silently came back empty. It now uses the absolute path and
+  degrades cleanly when the listing needs root.
+
+### Added
+
+- `tests/static/docker-abspath-check.sh` — CI guard that fails if any command
+  executes docker by bare name. Wired into the Validate workflow.
+- Integration coverage for the previously-untested service-discovery branches
+  of `/first-run`, `/logs`, and `/nas-status` (each run against a PATH that
+  omits `/usr/local/bin` and `/usr/syno/sbin`), plus the matching mock-NAS
+  `docker version`/`logs`/`ps --format` and `synoservice` stubs.
+
 ## [0.4.0] — 2026-05-12
 
 ### Added
+
 - `/compose-list` — read-only Compose-project overview
 - `/compose-up [project]` — start a stopped stack
 - `/compose-down <project>` — stop a stack, protected by
@@ -20,6 +46,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Mock-NAS docker + docker-compose stubs with daemon-state controls
 
 ### Security
+
 - Plugin uses sudoers Drop-in for /usr/local/bin/docker (DSM has no
   pre-created docker-group; for users already in administrators with
   `(ALL) ALL`, the NOPASSWD override is a usability win, not a
