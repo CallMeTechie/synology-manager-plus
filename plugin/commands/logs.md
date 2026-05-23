@@ -104,7 +104,9 @@ case "$source" in
     fi
     ;;
   docker)
-    CONTAINERS=$("${SSH[@]}" "docker ps --format '{{.Names}}' 2>/dev/null | head -10" || echo "")
+    # /usr/local/bin/docker is absolute: DSM's non-interactive SSH PATH omits
+    # /usr/local/bin, so a bare `docker` would not resolve even when installed.
+    CONTAINERS=$("${SSH[@]}" "/usr/local/bin/docker ps --format '{{.Names}}' 2>/dev/null | head -10" || echo "")
     if [ -z "$CONTAINERS" ]; then
       echo "No running docker containers (or docker not accessible — check group membership)" >&2
       exit 0
@@ -112,7 +114,7 @@ case "$source" in
     RAW=""
     for c in $CONTAINERS; do
       RAW+="=== $c ==="$'\n'
-      RAW+=$("${SSH[@]}" "docker logs --tail 100 $c 2>&1 | tail -100" 2>/dev/null || echo "(failed)")
+      RAW+=$("${SSH[@]}" "/usr/local/bin/docker logs --tail 100 $c 2>&1 | tail -100" 2>/dev/null || echo "(failed)")
       RAW+=$'\n'
     done
     ;;

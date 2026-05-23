@@ -67,7 +67,11 @@ SSH=(
 "${SSH[@]}" "cat /proc/mdstat 2>/dev/null || echo 'mdstat not available'"
 
 # 3. Running Synology services (top 40)
-"${SSH[@]}" "synoservice --list 2>/dev/null | head -40 || echo 'synoservice not available'"
+# synoservice lives in /usr/syno/sbin, which — like /usr/local/bin — is absent
+# from a non-interactive SSH PATH, so a bare `synoservice` would not resolve.
+# Try privileged first (NOPASSWD drop-in or admin), then unprivileged, then
+# degrade gracefully. head runs locally so the remote fall-through stays exit-clean.
+"${SSH[@]}" "sudo -n /usr/syno/sbin/synoservice --list 2>/dev/null || /usr/syno/sbin/synoservice --list 2>/dev/null || echo 'synoservice not available'" | head -40
 
 # 4. System load and memory
 "${SSH[@]}" "uptime && free -h"

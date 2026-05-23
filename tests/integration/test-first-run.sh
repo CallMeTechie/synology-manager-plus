@@ -32,6 +32,30 @@ echo "PASS: all three test shares present"
 assert_eq "yes" "$SUDO_OK" "sudo passwordless"
 echo "PASS: sudo NOPASSWD detected"
 
+# Scenario E: docker discovery must resolve via the ABSOLUTE path.
+# Regression for the DSM bug: a non-interactive SSH session does not source
+# /etc/profile, so /usr/local/bin (where Container Manager installs docker) is
+# absent from PATH. We simulate that here by stripping /usr/local/bin and run
+# the REAL discovery payload extracted from the command file — so this test
+# fails again if anyone reverts first-run.md to a bare `docker`.
+echo "--- Scenario E: docker discovery under DSM-like PATH (no /usr/local/bin) ---"
+FIRST_RUN_MD="$SCRIPT_DIR/../../plugin/commands/first-run.md"
+PAYLOAD=$(grep -F 'DOCKER_OK=$(discover docker' "$FIRST_RUN_MD" | sed -E 's/^.*discover docker "(.*)"\)$/\1/')
+[ -n "$PAYLOAD" ] || { echo "FAIL E: could not extract docker-discovery payload from first-run.md"; exit 1; }
+
+RESULT=$(ssh_mock "export PATH=/usr/bin:/bin; $PAYLOAD")
+[[ "$RESULT" == *"Docker version"* ]] || {
+  echo "FAIL E: discovery did not resolve docker under DSM-like PATH; got '$RESULT'"
+  echo "        (a bare 'docker' fails here — the command must use /usr/local/bin/docker)"
+  exit 1
+}
+echo "PASS E: first-run discovery resolves docker via absolute path ($RESULT)"
+
+# Negative control: prove the bug WOULD reproduce with a bare-name probe.
+BARE=$(ssh_mock "export PATH=/usr/bin:/bin; command -v docker >/dev/null && docker --version || echo not-installed")
+assert_eq "not-installed" "$BARE" "bare 'docker' unresolved when /usr/local/bin absent"
+echo "PASS E (control): bare 'docker' confirmed unresolvable under DSM-like PATH"
+
 PROFILE="$HOME/nas-profile-test.md"
 cat > "$PROFILE" <<EOF
 # Synology NAS Profile

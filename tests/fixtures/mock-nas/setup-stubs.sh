@@ -18,7 +18,8 @@ mkdir -p /volume1/documents /volume1/media /volume1/backups
 echo "test file" > /volume1/documents/readme.txt
 chown -R nas-test:nas-test /volume1
 
-cat > /usr/local/bin/synoservice <<'EOF'
+mkdir -p /usr/syno/sbin
+cat > /usr/syno/sbin/synoservice <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
   --list)
@@ -34,7 +35,7 @@ case "$1" in
     ;;
 esac
 EOF
-chmod +x /usr/local/bin/synoservice
+chmod +x /usr/syno/sbin/synoservice
 
 # Phase 2: smartctl 6.5 Mock — Text-Output statt JSON
 mkdir -p /opt/mock-smartctl
@@ -135,6 +136,20 @@ cat > /usr/local/bin/docker <<'DOCKER_EOF'
 state="${MOCK_DOCKER_DAEMON_STATE:-up}"
 
 case "$1" in
+  version|--version)
+    # `docker --version` needs neither daemon nor sudo — used by /first-run
+    # discovery to detect that docker is installed at /usr/local/bin/docker.
+    echo "Docker version 24.0.2, build mock"
+    exit 0
+    ;;
+  logs)
+    # `docker logs <container>` — used by /logs --source=docker. Include an
+    # error/warn line so the default (error-only) filter has output to show.
+    echo "2026-05-12T12:00:00Z INFO  startup ok"
+    echo "2026-05-12T12:00:05Z WARN  cache miss, refetching"
+    echo "2026-05-12T12:01:10Z ERROR upstream timeout"
+    exit 0
+    ;;
   info)
     case "$state" in
       up)
@@ -247,10 +262,17 @@ LS_EOF
     esac
     ;;
   ps)
+    # Order matters: /docker-list's format carries BOTH .Names and the
+    # com.docker.compose.project label, so match the more specific label first.
+    # /logs uses a plain '{{.Names}}' format and falls through to the .Names arm.
     if [[ "$*" == *--format*com.docker.compose.project* ]]; then
       printf 'healthy-stack-web-1\tnginx:alpine\tUp 1h\thealthy-stack\n'
       printf 'healthy-stack-db-1\tpostgres:16\tUp 1h\thealthy-stack\n'
       printf 'standalone-redis\tredis:7-alpine\tUp 30m\t\n'
+    elif [[ "$*" == *--format*.Names* ]]; then
+      # `docker ps --format '{{.Names}}'` — used by /logs --source=docker.
+      printf 'healthy-stack-web-1\n'
+      printf 'standalone-redis\n'
     else
       echo "CONTAINER ID   IMAGE          STATUS"
       echo "abc123         nginx:alpine   Up 1h"

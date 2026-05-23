@@ -23,6 +23,9 @@ jobs:
       - name: Shellcheck command snippets
         run: bash tests/static/shellcheck-commands.sh
 
+      - name: Docker absolute-path check
+        run: bash tests/static/docker-abspath-check.sh
+
       - name: Markdown lint
         run: bash tests/static/markdown-lint.sh
 
