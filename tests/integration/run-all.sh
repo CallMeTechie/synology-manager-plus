@@ -65,12 +65,12 @@ TESTS=(
   test-nas-status.sh
   test-list-shares.sh
   test-manage-mounts.sh
-  # Phase 2:
+  # Smart health, summary, logs, DSM updates:
   test-smart-status.sh
   test-health-summary.sh
   test-logs.sh
   test-dsm-update-check.sh
-  # Phase 3:
+  # Docker / Compose:
   test-compose-list.sh
   test-docker-list.sh
   test-compose-logs.sh

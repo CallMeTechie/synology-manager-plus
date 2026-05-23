@@ -70,7 +70,7 @@ fi
 # oder die Reihenfolge der Checks geändert werden, MUSS hier
 # nachgezogen werden — sonst falsche Test-Greens.
 #
-# Sync-Marker (vor jeder Phase-2+-Änderung von smart-status.md
+# Sync-Marker (vor jeder Änderung von smart-status.md
 # zu suchen): grep "MUST-SYNC: Replikation der Verdict-Logik"
 # Wenn das Command und dieser Helper drift'en, fängt erst Layer 3
 # (manueller Test auf echter DS218+) den Bug.

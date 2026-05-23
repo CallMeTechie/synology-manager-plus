@@ -50,7 +50,7 @@ done
 echo "PASS 6: --last regex correctly distinguishes valid/invalid"
 
 echo "--- Scenario 7: Empty ARGUMENTS under set -u (cold-start safety) ---"
-# Phase-2-Fix fuer Concern 1: ${ARGUMENTS:-} darf bei leerem ARGUMENTS
+# Fix fuer Concern 1: ${ARGUMENTS:-} darf bei leerem ARGUMENTS
 # nicht ausfaellen. Hier in einer Subshell mit set -u testen.
 (
   set -u

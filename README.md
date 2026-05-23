@@ -2,9 +2,9 @@
 
 A Claude Code plugin for managing a Synology NAS via SSH. Ten commands for setup, diagnostics, storage, SMART health, logs, and DSM update monitoring — all SSH-based, no DSM Web API required.
 
-**This is a fork** of [`danielrosehill/synology-manager-plugin`](https://github.com/danielrosehill/synology-manager-plugin). The fork addresses three blockers in the upstream v0.1.0 and grows the command set across phases. Original credit to Daniel Rosehill.
+**This is a fork** of [`danielrosehill/synology-manager-plugin`](https://github.com/danielrosehill/synology-manager-plugin). The fork addresses three blockers in the upstream v0.1.0 and grows the command set over successive releases. Original credit to Daniel Rosehill.
 
-**Latest version:** v0.4.0 (Phase 3 — Docker & Operations). Verified against DSM 7.3.1-86003 on a DS218+.
+**Latest version:** v0.4.1. Verified against DSM 7.3.1-86003 on a DS218+.
 
 ## What's different from the original
 
@@ -104,7 +104,7 @@ Synology can change `synoupgrade --check` status-code constants without notice. 
 
 **`/compose-list` says "passwordless sudo for /usr/local/bin/docker is not configured".**
 DSM has no `docker` group pre-created, so the plugin uses a sudoers
-drop-in like Phase 2 (smartctl, synoupgrade). Install once:
+drop-in as for smartctl and synoupgrade. Install once:
 
 ```bash
 ssh your-nas
@@ -174,32 +174,30 @@ sudo -n /usr/local/bin/docker image prune     # removes dangling images
 
 ## Roadmap
 
-### Phase 3 — Docker & Operations  ✅ shipped in v0.4.0
+### Shipped
 
-- `/compose-list` — overview of all Compose projects
-- `/compose-up` — start a stopped stack
-- `/compose-down` — stop a stack (with critical-project protection)
-- `/compose-update` — pull + restart atomically
-- `/compose-logs` — filtered Compose-Logs viewer
-- `/docker-list` — flat container listing with Compose tagging
+Docker and Compose operations landed in v0.4.0: `/compose-list`, `/compose-up`,
+`/compose-down`, `/compose-update`, `/compose-logs`, `/docker-list`.
 
-### Phase 4 — Backup & Snapshots
+### Planned
+
+#### Backup and snapshots
 
 - BTRFS snapshot management (list, create, restore)
-- Hyper Backup integration (Phase 6 — requires DSM Web API)
+- Hyper Backup integration (requires the DSM Web API)
 
-### Phase 5 — Security & Audit
+#### Security and audit
 
 - WireGuard / VPN status
 - User and permissions management
 - Failed-login audit, active sessions, security scan
 
-### Phase 6+ — DSM Web API Layer
+#### DSM Web API layer
 
-- SID-based auth + 2FA awareness
+- SID-based auth with 2FA awareness
 - Hyper Backup status/trigger, snapshot replication, app permissions
 
-Each phase lands as its own spec under `docs/superpowers/specs/`.
+Design notes for each area live under `docs/superpowers/specs/`.
 
 ## License
 
