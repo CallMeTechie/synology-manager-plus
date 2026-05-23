@@ -75,7 +75,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Pre-Implementation Notes
 
-- Phase 2 design was verified against real DS218+ hardware (DSM 7.3.1-86003 + smartctl 6.5) before the plan was written. Mock-NAS smartctl profiles are derived from real `smartctl -d ata -a /dev/sda` output, redacted of disk serial numbers.
+- This release was verified against real DS218+ hardware (DSM 7.3.1-86003 + smartctl 6.5) before the plan was written. Mock-NAS smartctl profiles are derived from real `smartctl -d ata -a /dev/sda` output, redacted of disk serial numbers.
 
 ---
 

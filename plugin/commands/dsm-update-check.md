@@ -65,7 +65,7 @@ case "$STATUS" in
     ;;
   UPGRADE_CHECKNEWDSM|UPGRADE_HAS_NO_NEW_DSM|UPGRADE_UP_TO_DATE)
     # UPGRADE_CHECKNEWDSM was empirically verified against a DSM 7.3.1-86003
-    # Update 1 install (latest at the time of Phase-2 release; DSM Web UI
+    # Update 1 install (latest at the time of writing; DSM Web UI
     # showed no available update). The literal name "check new DSM" is
     # misleading — it actually means "check was performed, no new DSM found".
     STATE="up-to-date"

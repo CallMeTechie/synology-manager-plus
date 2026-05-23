@@ -36,7 +36,7 @@ exec sudo /usr/sbin/sshd -D -e
 ENTRYPOINT_EOF
 RUN chmod +x /entrypoint.sh
 
-# Phase 2: smartctl-Mock-Profile in den Container kopieren
+# smartctl-Mock-Profile in den Container kopieren
 COPY smartctl-profiles/ /opt/mock-smartctl/
 
 EXPOSE 2222

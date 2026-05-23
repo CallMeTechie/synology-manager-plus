@@ -37,7 +37,7 @@ esac
 EOF
 chmod +x /usr/syno/sbin/synoservice
 
-# Phase 2: smartctl 6.5 Mock — Text-Output statt JSON
+# smartctl 6.5 Mock — Text-Output statt JSON
 mkdir -p /opt/mock-smartctl
 # Profile-Dateien werden vom Dockerfile dorthin kopiert (siehe COPY-Step).
 
@@ -68,7 +68,7 @@ esac
 SMART_EOF
 chmod +x /usr/bin/smartctl
 
-# Phase 2: Stub-Logs für /logs-Command-Tests
+# Stub-Logs für /logs-Command-Tests
 mkdir -p /var/log/synolog
 
 cat > /var/log/messages <<'MSG_EOF'
@@ -101,7 +101,7 @@ cat > /var/log/synopkg.log <<'PKG_EOF'
 2026-05-10T03:00:08 [INFO] No new updates available
 PKG_EOF
 
-# Phase 2: synoupgrade Mock — emuliert DSM 7.3.1 Verhalten
+# synoupgrade Mock — emuliert DSM 7.3.1 Verhalten
 # Real-Output: "UPGRADE_CHECKNEWDSM" + exit 255 (beobachtet)
 mkdir -p /usr/syno/sbin
 cat > /usr/syno/sbin/synoupgrade <<'SYNO_EOF'
@@ -127,7 +127,7 @@ esac
 SYNO_EOF
 chmod +x /usr/syno/sbin/synoupgrade
 
-# Phase 3: docker + docker-compose Mock
+# docker + docker-compose Mock
 # State per env var, default "up". Daemon-Pre-Check classification
 # uses stderr output patterns identical to a real docker client.
 mkdir -p /var/lib/mock-docker
