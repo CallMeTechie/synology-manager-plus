@@ -1,0 +1,80 @@
+name: Release
+
+# Tags and publishes a GitHub Release whenever the plugin version changes on
+# main. The version is the single source of truth in plugin.json; release notes
+# come from the matching CHANGELOG section. No third-party actions.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugin/.claude-plugin/plugin.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # full history + tags for the existence check
+
+      - name: Read version from plugin.json
+        id: ver
+        run: |
+          VERSION=$(jq -r '.version' plugin/.claude-plugin/plugin.json)
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "plugin.json has no .version" >&2
+            exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check whether the tag already exists
+        id: check
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists — nothing to release."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes from CHANGELOG
+        if: steps.check.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' > notes.md
+          if [ ! -s notes.md ]; then
+            echo "No CHANGELOG section for $VERSION — refusing to release without notes." >&2
+            exit 1
+          fi
+          echo "----- release notes -----"
+          cat notes.md
+
+      - name: Create tag and GitHub release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh release create "$TAG" \
+            --target "$SHA" \
+            --title "$TAG" \
+            --notes-file notes.md
