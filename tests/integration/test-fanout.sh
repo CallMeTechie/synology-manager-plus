@@ -18,11 +18,15 @@ echo "PASS: load_nas identical across the 3 overview commands"
 # Two-slug fan-out against the single mock.
 cd "$TMP_HOME"
 gen_plugin_key; deploy_plugin_key
-# Seed the mock's host key into the system known_hosts so that load_nas-built
-# SSH arrays (which don't pass StrictHostKeyChecking=no) can connect.  SSH
-# resolves UserKnownHostsFile via /etc/passwd home, not $HOME, so we must
-# write to the real root known_hosts, not $TMP_HOME/.ssh/known_hosts.
-ssh-keyscan -p "$MOCK_PORT" "$MOCK_HOST" >> /root/.ssh/known_hosts 2>/dev/null || true
+# Seed the mock's host key into the CURRENT USER's real known_hosts so that
+# load_nas-built SSH arrays (which don't pass StrictHostKeyChecking=no) can
+# connect. OpenSSH resolves the default known_hosts via the passwd home, NOT
+# $HOME (which setup_test_home redirected) — so resolve the passwd home
+# dynamically: /root locally, /home/runner on the CI runner.
+SSH_HOME=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)
+[ -n "$SSH_HOME" ] || SSH_HOME="$HOME"
+mkdir -p "$SSH_HOME/.ssh"
+ssh-keyscan -p "$MOCK_PORT" "$MOCK_HOST" >> "$SSH_HOME/.ssh/known_hosts" 2>/dev/null || true
 for s in a b; do
   mkdir -p "context/nas/$s/volumes" "context/nas/$s/mounts"
   cat > "context/nas/$s/profile.md" <<EOF

@@ -15,6 +15,8 @@
 - Commits/`git add` may be blocked by a local hook in some environments. If `git commit` is refused, leave the work staged-in-tree and note it; do not fight the hook.
 - All paths are relative to the repo root `/root/synology-manager-plus` unless absolute.
 
+**Note on "identical behavior":** The retrofit keeps single-NAS behavior **functionally** equivalent, with two intentional, minor improvements: (a) commands now fail early with a clear "SSH key not found" message if the key file is missing (previously `ssh` failed later), and (b) `compose-down`'s previously-silent `|| exit 1` validations now print a message. These are improvements, not regressions — do not claim byte-identical behavior.
+
 ---
 
 ## File Structure
@@ -22,12 +24,15 @@
 | File | Responsibility | Action |
 |---|---|---|
 | `plugin/commands/_profile-lib.sh` | Canonical, unit-tested NAS-resolution + migration functions. NOT sourced by commands; mirrored inline. | Create |
-| `tests/unit/test-profile-lib.sh` | Unit tests for every `_profile-lib.sh` function (slug validation, derive, pointer fallback, list, load, migrate + resume). | Create |
+| `tests/unit/test-profile-lib.sh` | Unit tests for every `_profile-lib.sh` function. | Create |
 | `tests/static/shellcheck-commands.sh` | Extend to also lint `plugin/commands/_*.sh` directly. | Modify |
-| `plugin/commands/{nas-status,smart-status,health-summary,list-shares,logs,manage-mounts,diag,dsm-update-check,docker-list,compose-list,compose-up,compose-down,compose-logs,compose-update}.md` | Replace ad-hoc profile extraction with the canonical inline resolver block + NAS-relative state paths. | Modify |
-| `plugin/commands/first-run.md` | Run migration first; write profile to `context/nas/<slug>/`; set sentinel; idempotency via new layout; NAS-relative volumes/mounts. | Modify |
+| `plugin/commands/{nas-status,smart-status,health-summary,list-shares,logs,manage-mounts,dsm-update-check,docker-list,compose-list,compose-up,compose-down,compose-logs,compose-update}.md` | Replace ad-hoc profile extraction with the canonical inline resolver block + NAS-relative state paths. | Modify |
+| `plugin/commands/diag.md` | Bespoke **non-fatal** active-NAS resolution (diag must run all 7 checks). | Modify |
+| `plugin/commands/first-run.md` | Migration first; per-NAS profile write; sentinel; idempotency via new layout; NAS-relative volumes/mounts. | Modify |
 | `plugin/commands/setup-ssh.md` | Read/write the NAS-relative profile. | Modify |
-| `tests/integration/lib/test-helpers.sh` | `write_test_profile` includes `hostname` for deterministic migration in tests. | Modify |
+| `plugin/context/` (shipped scaffolding) | Replace flat `nas-profile.md`/`storage-report.md`/`volumes`/`mounts` with empty `nas/.gitkeep` so a fresh install starts cleanly. | Modify |
+| `tests/integration/lib/test-helpers.sh` | `write_test_profile` includes `hostname` for deterministic migration. | Modify |
+| `README.md`, `plugin/CLAUDE.md` | Update stale flat `context/` path references to the per-NAS layout. | Modify |
 | `CHANGELOG.md`, `plugin/.claude-plugin/plugin.json` | Changelog entry + version bump (kept in sync — `validate-manifests.sh` enforces). | Modify |
 
 ---
@@ -88,7 +93,7 @@ smp_list_nas() {
   done | sort
 }
 
-# smp_active_nas — echo the active slug, or fail (exit 1) with a clear message.
+# smp_active_nas — echo the active slug, or fail (return 1) with a clear message.
 # Self-heals the sentinel when exactly one NAS exists.
 smp_active_nas() {
   local active
@@ -122,14 +127,8 @@ smp_active_nas() {
   fi
 }
 
-# smp_profile_path [slug] — echo context/nas/<slug>/profile.md (default: active).
-smp_profile_path() {
-  local slug="${1:-}"
-  [ -n "$slug" ] || { slug=$(smp_active_nas) || return 1; }
-  printf 'context/nas/%s/profile.md' "$slug"
-}
-
 # smp_load_profile [slug] — set HOST PORT NAS_USER CONNECT_TIMEOUT KEY_PATH SLUG.
+# shellcheck disable=SC2034  # HOST/PORT/NAS_USER/CONNECT_TIMEOUT/KEY_PATH/SLUG are outputs consumed by callers
 smp_load_profile() {
   local slug="${1:-}" profile field var
   if [ -n "$slug" ]; then
@@ -166,10 +165,11 @@ smp_load_profile() {
   [[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host: $HOST" >&2; return 1; }
   [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port: $PORT" >&2; return 1; }
   [[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user: $NAS_USER" >&2; return 1; }
-  [[ "$KEY_PATH" =~ ^[A-Za-z0-9_./-]+$ ]] || { echo "Invalid key_path: $KEY_PATH" >&2; return 1; }
+  [[ "$KEY_PATH" =~ ^[A-Za-z0-9_./~-]+$ ]] || { echo "Invalid key_path: $KEY_PATH" >&2; return 1; }
 }
 
-# smp_build_ssh — set SSH=( ... ). Requires smp_load_profile to have run first.
+# smp_build_ssh — set the SSH=( ... ) array. Requires smp_load_profile first.
+# shellcheck disable=SC2034  # SSH is the output, consumed by callers via "${SSH[@]}"
 smp_build_ssh() {
   [ -n "${KEY_PATH:-}" ] || { echo "smp_build_ssh: call smp_load_profile first" >&2; return 1; }
   [ -f "$KEY_PATH" ] || { echo "SSH key not found: $KEY_PATH" >&2; return 1; }
@@ -210,14 +210,15 @@ smp_migrate() {
 
   rm -f context/nas-profile.md context/storage-report.md
   rm -rf context/volumes context/mounts
+  rm -rf context/.nas-migrate.tmp        # remove the now-empty staging parent
   echo "[migration] single-NAS workspace migrated to context/nas/$slug/"
 }
 ```
 
-- [ ] **Step 2: Verify it parses + passes shellcheck**
+- [ ] **Step 2: Parse + shellcheck (must be clean)**
 
 Run: `bash -n plugin/commands/_profile-lib.sh && shellcheck --severity=warning plugin/commands/_profile-lib.sh`
-Expected: no output, exit 0.
+Expected: no output, exit 0. (The two `# shellcheck disable=SC2034` directives above `smp_load_profile`/`smp_build_ssh` suppress the expected "output var unused in this file" warnings.)
 
 - [ ] **Step 3: Commit**
 
@@ -232,11 +233,13 @@ git commit -m "feat: add canonical _profile-lib.sh NAS resolver and migration" -
 **Files:**
 - Create: `tests/unit/test-profile-lib.sh`
 
+**Critical test-harness rule:** counters and `cd` must happen in the **current shell**, never in a `$( )` command substitution or a `( )` subshell — otherwise increments/`cd` are lost and the test reports a false "0 fail" (the bug found in review). `setup_ws` `cd`s in the current shell; assertions run in the current shell.
+
 - [ ] **Step 1: Write the test**
 
 ```bash
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 TEST_NAME="profile-lib"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
@@ -247,9 +250,11 @@ pass=0; fail=0
 ok() { echo "PASS: $1"; pass=$((pass+1)); }
 no() { echo "FAIL: $1"; fail=$((fail+1)); }
 
-new_workspace() { local d; d=$(mktemp -d -t "smp-lib-XXXX"); cd "$d"; mkdir -p context; printf '%s' "$d"; }
+WS=""
+setup_ws() { WS=$(mktemp -d -t "smp-lib-XXXX"); mkdir -p "$WS/context"; cd "$WS"; }
+teardown_ws() { cd "$ROOT"; [ -n "$WS" ] && rm -rf "$WS"; WS=""; }
 
-# --- smp_validate_slug ---
+# --- smp_validate_slug (no cwd dependency) ---
 for good in main nas-01 a a1; do
   smp_validate_slug "$good" && ok "valid slug: $good" || no "valid slug rejected: $good"
 done
@@ -266,34 +271,49 @@ deq "My NAS!" "my-nas"
 deq ""        "main"
 deq "!!!"     "main"
 deq "---"     "main"
-got=$(smp_derive_slug "$(printf 'X%.0s' $(seq 1 40))"); smp_validate_slug "$got" && ok "derive long -> valid ($got)" || no "derive long -> invalid '$got'"
+gotlong=$(smp_derive_slug "$(printf 'X%.0s' $(seq 1 40))")
+smp_validate_slug "$gotlong" && ok "derive long -> valid ($gotlong)" || no "derive long -> invalid '$gotlong'"
 
 # --- smp_active_nas fallback rules (Sec 4.2) ---
-( w=$(new_workspace)
-  smp_active_nas >/dev/null 2>&1 && no "active: empty should fail" || ok "active: empty fails"; rm -rf "$w" )
-( w=$(new_workspace)
-  mkdir -p context/nas/only/; echo x > context/nas/only/profile.md
-  out=$(smp_active_nas); [ "$out" = "only" ] && [ -f context/active-nas ] && ok "active: single self-heals" || no "active: single failed ($out)"; rm -rf "$w" )
-( w=$(new_workspace)
-  mkdir -p context/nas/a/ context/nas/b/; echo x>context/nas/a/profile.md; echo x>context/nas/b/profile.md
-  smp_active_nas >/dev/null 2>&1 && no "active: multi w/o pointer should fail" || ok "active: multi w/o pointer fails"; rm -rf "$w" )
-( w=$(new_workspace)
-  mkdir -p context/nas/a/ context/nas/b/; echo x>context/nas/a/profile.md; echo x>context/nas/b/profile.md
-  echo b > context/active-nas
-  out=$(smp_active_nas); [ "$out" = "b" ] && ok "active: valid pointer honored" || no "active: pointer ignored ($out)"; rm -rf "$w" )
-( w=$(new_workspace)
-  printf '# old\n- hostname: nas9\n' > context/nas-profile.md
-  smp_active_nas 2>&1 | grep -q "Legacy single-NAS" && ok "active: legacy hint" || no "active: no legacy hint"; rm -rf "$w" )
+setup_ws
+smp_active_nas >/dev/null 2>&1 && no "active: empty should fail" || ok "active: empty fails"
+teardown_ws
+
+setup_ws
+mkdir -p context/nas/only; echo x > context/nas/only/profile.md
+out=$(smp_active_nas 2>/dev/null) && [ "$out" = "only" ] && [ -f context/active-nas ] && ok "active: single self-heals" || no "active: single failed ($out)"
+teardown_ws
+
+setup_ws
+mkdir -p context/nas/a context/nas/b; echo x>context/nas/a/profile.md; echo x>context/nas/b/profile.md
+smp_active_nas >/dev/null 2>&1 && no "active: multi w/o pointer should fail" || ok "active: multi w/o pointer fails"
+teardown_ws
+
+setup_ws
+mkdir -p context/nas/a context/nas/b; echo x>context/nas/a/profile.md; echo x>context/nas/b/profile.md
+echo b > context/active-nas
+out=$(smp_active_nas 2>/dev/null); [ "$out" = "b" ] && ok "active: valid pointer honored" || no "active: pointer ignored ($out)"
+teardown_ws
+
+setup_ws
+printf '# old\n- hostname: nas9\n' > context/nas-profile.md
+# Capture-then-grep: smp_active_nas returns 1 here, and piping it directly into
+# grep under `set -o pipefail` would make the pipeline exit 1 (false FAIL).
+out=$(smp_active_nas 2>&1) || true
+printf '%s\n' "$out" | grep -q "Legacy single-NAS" && ok "active: legacy hint" || no "active: no legacy hint"
+teardown_ws
 
 # --- smp_list_nas: sorted, ignores dirs without profile.md ---
-( w=$(new_workspace)
-  mkdir -p context/nas/zeta/ context/nas/alpha/ context/nas/empty/
-  echo x>context/nas/zeta/profile.md; echo x>context/nas/alpha/profile.md
-  out=$(smp_list_nas | tr '\n' ' '); [ "$out" = "alpha zeta " ] && ok "list: sorted, filtered" || no "list: got '$out'"; rm -rf "$w" )
+setup_ws
+mkdir -p context/nas/zeta context/nas/alpha context/nas/empty
+echo x>context/nas/zeta/profile.md; echo x>context/nas/alpha/profile.md
+out=$(smp_list_nas | tr '\n' ' '); [ "$out" = "alpha zeta " ] && ok "list: sorted, filtered" || no "list: got '$out'"
+teardown_ws
 
 # --- smp_load_profile: extracts + validates; key_path charset ---
-( w=$(new_workspace); mkdir -p context/nas/main
-  cat > context/nas/main/profile.md <<EOF
+setup_ws
+mkdir -p context/nas/main
+cat > context/nas/main/profile.md <<EOF
 ## Connection
 - host: 192.168.1.10
 - port: 22
@@ -301,14 +321,17 @@ got=$(smp_derive_slug "$(printf 'X%.0s' $(seq 1 40))"); smp_validate_slug "$got"
 - key_path: ~/.ssh/synology-manager-plus_ed25519
 - connect_timeout_seconds: 10
 EOF
-  echo main > context/active-nas
-  if smp_load_profile && [ "$HOST" = "192.168.1.10" ] && [ "$PORT" = "22" ] && [ "$NAS_USER" = "admin" ] && [ "$SLUG" = "main" ]; then
-    ok "load: extracts fields"; else no "load: extraction failed"; fi
-  rm -rf "$w" )
-( w=$(new_workspace); mkdir -p context/nas/main
-  printf '## Connection\n- host: h\n- port: 22\n- user: u\n- key_path: /bad;rm\n' > context/nas/main/profile.md
-  echo main > context/active-nas
-  smp_load_profile >/dev/null 2>&1 && no "load: bad key_path accepted" || ok "load: bad key_path rejected"; rm -rf "$w" )
+echo main > context/active-nas
+if smp_load_profile && [ "$HOST" = "192.168.1.10" ] && [ "$PORT" = "22" ] && [ "$NAS_USER" = "admin" ] && [ "$SLUG" = "main" ]; then
+  ok "load: extracts fields"; else no "load: extraction failed"; fi
+teardown_ws
+
+setup_ws
+mkdir -p context/nas/main
+printf '## Connection\n- host: h\n- port: 22\n- user: u\n- key_path: /bad;rm\n' > context/nas/main/profile.md
+echo main > context/active-nas
+smp_load_profile >/dev/null 2>&1 && no "load: bad key_path accepted" || ok "load: bad key_path rejected"
+teardown_ws
 
 # --- smp_migrate: lossless + idempotent + resume ---
 seed_legacy() {
@@ -316,30 +339,33 @@ seed_legacy() {
   echo "report" > context/storage-report.md
   mkdir -p context/volumes context/mounts; echo v > context/volumes/v1.txt; echo m > context/mounts/current.txt
 }
-( w=$(new_workspace); seed_legacy
-  smp_migrate >/dev/null
-  if [ -f context/nas/nasbox/profile.md ] && [ -f context/nas/nasbox/storage-report.md ] \
-     && [ -f context/nas/nasbox/volumes/v1.txt ] && [ -f context/nas/nasbox/mounts/current.txt ] \
-     && [ "$(cat context/active-nas)" = "nasbox" ] && [ ! -f context/nas-profile.md ] \
-     && [ ! -d context/volumes ]; then ok "migrate: lossless"; else no "migrate: layout wrong"; fi
-  smp_migrate >/dev/null 2>&1; ok "migrate: re-run idempotent (no error)"
-  rm -rf "$w" )
-( w=$(new_workspace); seed_legacy
-  mkdir -p context/.nas-migrate.tmp/junk context/nas/nasbox; echo partial > context/nas/nasbox/profile.md
-  smp_migrate >/dev/null
-  [ "$(cat context/active-nas)" = "nasbox" ] && grep -q 192.168.1.10 context/nas/nasbox/profile.md \
-    && [ ! -d context/.nas-migrate.tmp ] && ok "migrate: resume lossless" || no "migrate: resume failed"
-  rm -rf "$w" )
+setup_ws
+seed_legacy
+smp_migrate >/dev/null
+if [ -f context/nas/nasbox/profile.md ] && [ -f context/nas/nasbox/storage-report.md ] \
+   && [ -f context/nas/nasbox/volumes/v1.txt ] && [ -f context/nas/nasbox/mounts/current.txt ] \
+   && [ "$(cat context/active-nas)" = "nasbox" ] && [ ! -f context/nas-profile.md ] \
+   && [ ! -d context/volumes ] && [ ! -d context/.nas-migrate.tmp ]; then ok "migrate: lossless"; else no "migrate: layout wrong"; fi
+smp_migrate >/dev/null 2>&1 && ok "migrate: re-run idempotent" || no "migrate: re-run errored"
+teardown_ws
+
+setup_ws
+seed_legacy
+mkdir -p context/.nas-migrate.tmp/junk context/nas/nasbox; echo partial > context/nas/nasbox/profile.md
+smp_migrate >/dev/null
+[ "$(cat context/active-nas)" = "nasbox" ] && grep -q 192.168.1.10 context/nas/nasbox/profile.md \
+  && [ ! -d context/.nas-migrate.tmp ] && ok "migrate: resume lossless" || no "migrate: resume failed"
+teardown_ws
 
 echo ""
 echo "=== test-profile-lib: $pass pass, $fail fail ==="
 [ "$fail" -eq 0 ]
 ```
 
-- [ ] **Step 2: Run — expect PASS**
+- [ ] **Step 2: Run — expect all PASS**
 
 Run: `bash tests/unit/test-profile-lib.sh`
-Expected: all PASS, exit 0. If any case fails, fix `_profile-lib.sh` — the test is the spec of correct behavior. Then re-run.
+Expected: every line `PASS:`, final `=== test-profile-lib: N pass, 0 fail ===`, exit 0. **If any case fails, fix `_profile-lib.sh`** (the test is the correctness oracle), then re-run. There must be **zero** `FAIL:` lines — a `FAIL` line with "0 fail" in the summary means the harness is broken (the bug this rewrite fixes).
 
 - [ ] **Step 3: Commit**
 
@@ -374,7 +400,7 @@ done
 - [ ] **Step 2: Run the static check**
 
 Run: `bash tests/static/shellcheck-commands.sh`
-Expected: includes `PASS: _profile-lib.sh` and `PASS: _compose-lib.sh`; exit 0.
+Expected: includes `PASS: _profile-lib.sh` and `PASS: _compose-lib.sh`; exit 0. (If `_profile-lib.sh` fails with SC2034, the disable directives in Task 1 are missing/misplaced — they must sit on the line directly above the function definition.)
 
 - [ ] **Step 3: Commit**
 
@@ -386,7 +412,7 @@ git commit -m "test: shellcheck the shared command libraries directly" -- tests/
 
 ## Task 4: Finalize the canonical inline resolver block
 
-This block is the inline equivalent of `smp_migrate`-detection + `smp_active_nas` + `smp_load_profile` + `smp_build_ssh`. It is pasted verbatim into each retrofitted command (Tasks 5–6). **Defined once here; later tasks reference "the canonical resolver block".**
+This block is the inline equivalent of legacy-detection + `smp_active_nas` + `smp_load_profile` + `smp_build_ssh`, **logically identical to the lib** (including the legacy-hint-on-empty-fallback behavior). It is pasted verbatim into each retrofitted command in Tasks 5–6. **Defined once here.**
 
 ```bash
 set -euo pipefail
@@ -395,11 +421,6 @@ set -euo pipefail
 # Mirrors plugin/commands/_profile-lib.sh (canonical, unit-tested). Commands
 # cannot source libs, so this block is embedded inline. Keep in sync with the lib.
 SMP_SLUG_RE='^[a-z0-9][a-z0-9-]{0,31}$'
-
-if [ -f context/nas-profile.md ] && [ ! -d context/nas ]; then
-  echo "Legacy single-NAS layout detected — run /first-run to upgrade to the multi-NAS layout." >&2
-  exit 1
-fi
 
 ACTIVE=$(cat context/active-nas 2>/dev/null | head -1 || true)
 ACTIVE="${ACTIVE%%[[:space:]]*}"
@@ -413,7 +434,12 @@ if ! [[ "$ACTIVE" =~ $SMP_SLUG_RE ]] || [ ! -f "context/nas/$ACTIVE/profile.md" 
   if [ "${#smp_found[@]}" -eq 1 ]; then
     ACTIVE="${smp_found[0]}"; printf '%s\n' "$ACTIVE" > context/active-nas
   elif [ "${#smp_found[@]}" -eq 0 ]; then
-    echo "No NAS configured. Run /first-run." >&2; exit 1
+    if [ -f context/nas-profile.md ]; then
+      echo "Legacy single-NAS layout detected — run /first-run to upgrade to the multi-NAS layout." >&2
+    else
+      echo "No NAS configured. Run /first-run." >&2
+    fi
+    exit 1
   else
     echo "No active NAS selected. Run /nas-use <slug> (see /nas-list)." >&2; exit 1
   fi
@@ -441,18 +467,24 @@ done
 [[ "$HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Invalid host: $HOST" >&2; exit 1; }
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid port: $PORT" >&2; exit 1; }
 [[ "$NAS_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "Invalid user: $NAS_USER" >&2; exit 1; }
-[[ "$KEY_PATH" =~ ^[A-Za-z0-9_./-]+$ ]] || { echo "Invalid key_path: $KEY_PATH" >&2; exit 1; }
+[[ "$KEY_PATH" =~ ^[A-Za-z0-9_./~-]+$ ]] || { echo "Invalid key_path: $KEY_PATH" >&2; exit 1; }
 [ -f "$KEY_PATH" ] || { echo "SSH key not found: $KEY_PATH" >&2; exit 1; }
 
 SSH=( ssh -i "$KEY_PATH" -o ConnectTimeout="$CONNECT_TIMEOUT" -p "$PORT" "$NAS_USER@$HOST" )
 # === end resolver block ===
 ```
 
-- [ ] **Step 1: Sanity-check the block in isolation before pasting it 14×**
+Note: there is **no** top-level `[ -f context/nas-profile.md ] && [ ! -d context/nas ]` short-circuit — the legacy case is handled inside the empty-fallback branch, exactly as the lib does, so the inline block and lib emit the same message in every scenario (including "legacy file present + empty `context/nas/`").
 
-Save the block to `/tmp/smp-block.sh`, prepend `#!/usr/bin/env bash`, run:
-`shellcheck --severity=warning --shell=bash /tmp/smp-block.sh`
-Expected: exit 0 (no warnings). If a warning appears, fix the block here and update Task 1's lib to match, then re-run Task 2.
+- [ ] **Step 1: Sanity-check the block as it is actually consumed**
+
+The block is consumed inside command markdown, where `tests/static/shellcheck-commands.sh` wraps each command's snippets with `# shellcheck disable=SC2154,SC2034`. Validate it the same way:
+
+```bash
+{ echo '#!/usr/bin/env bash'; echo '# shellcheck disable=SC2154,SC2034'; cat /tmp/smp-block.sh; } > /tmp/smp-wrapped.sh
+shellcheck --severity=warning --shell=bash /tmp/smp-wrapped.sh
+```
+Expected: exit 0, no output. **Note:** a *bare* (unwrapped) shellcheck of the block reports `SC2034: SSH appears unused` — that is expected and benign (the consuming command calls `"${SSH[@]}"` in later blocks, and the real static check applies the SC2034 disable). Do not "fix" that by editing the block.
 
 (No commit — this task only validates the reused artifact.)
 
@@ -465,7 +497,7 @@ Expected: exit 0 (no warnings). If a warning appears, fix the block here and upd
 
 - [ ] **Step 1: Replace the profile-extraction + SSH-array blocks**
 
-In `nas-status.md`, the first ```bash block (the `PROFILE="context/nas-profile.md"` extraction) AND the `SSH=( ... )` array block are replaced by the **canonical resolver block** (Task 4). Delete both old blocks; insert the resolver block once where the first block was. The query commands that follow (`"${SSH[@]}" "df -h"` etc.) are unchanged — the block provides the same `SSH` array.
+Delete the first ```bash block (`PROFILE="context/nas-profile.md"` extraction) AND the `SSH=( ... )` array block. Insert the **canonical resolver block** (Task 4) once where the first block was. The query commands that follow (`"${SSH[@]}" "df -h"` etc.) are unchanged.
 
 - [ ] **Step 2: Make the state-write path NAS-relative**
 
@@ -475,10 +507,10 @@ Change the prose + write target from `context/storage-report.md` to `context/nas
 
 Replace "Read `context/nas-profile.md` and extract values" with: "Resolve the active NAS via the canonical resolver block (mirrors `_profile-lib.sh`); it sets `HOST/PORT/NAS_USER/CONNECT_TIMEOUT/KEY_PATH/SLUG` and the `SSH` array." Keep the `NAS_USER` (not `$USER`) note.
 
-- [ ] **Step 4: Static check**
+- [ ] **Step 4: Static checks (note the differing PASS strings)**
 
 Run: `bash tests/static/shellcheck-commands.sh && bash tests/static/frontmatter-check.sh && bash tests/static/markdown-lint.sh`
-Expected: `PASS: nas-status` in each; exit 0.
+Expected: `shellcheck-commands.sh` prints `PASS: nas-status`; `frontmatter-check.sh` prints `PASS: nas-status.md` (it keeps the `.md`); `markdown-lint.sh` prints no per-file `PASS` line but exits 0. All three exit 0.
 
 - [ ] **Step 5: Commit**
 
@@ -488,16 +520,16 @@ git commit -m "refactor: nas-status uses multi-NAS resolver and per-NAS state pa
 
 ---
 
-## Task 6: Retrofit the remaining 13 profile-reading commands
+## Task 6: Retrofit the remaining 12 profile-reading commands (NOT diag)
 
-Apply the **exact same transformation** as Task 5 to each command below: delete its `PROFILE="context/nas-profile.md"` extraction block and its `SSH=( ... )` block, insert the **canonical resolver block** (Task 4) once, and update NAS-relative state paths per the table. The transformation is mechanical and identical; only the state-path column differs.
+Apply the **same transformation** as Task 5 to each command below: delete its `PROFILE="context/nas-profile.md"` extraction block and its `SSH=( ... )` block, insert the **canonical resolver block** (Task 4) once, update NAS-relative state paths per the table. `diag` is handled separately in Task 7 (it must not use the exit-on-failure block).
 
 | Command file | Special handling beyond the resolver block |
 |---|---|
 | `smart-status.md` | none (read-only). |
-| `health-summary.md` | Its lazy `cpu_cores`/temp migration writes to the profile — change the target to `context/nas/$SLUG/profile.md`. |
-| `list-shares.md` | Volume snapshot path → `context/nas/$SLUG/volumes/<vol>-snapshot.txt`. |
-| `manage-mounts.md` | Mounts path → `context/nas/$SLUG/mounts/current.txt` (all references). |
+| `health-summary.md` | Its lazy `cpu_cores`/temp migration writes to the profile — change the target to `context/nas/$SLUG/profile.md`, **and** update the echo string `"[migration] cpu_cores=$NPROC written to nas-profile.md"` → `"... written to context/nas/$SLUG/profile.md"`. |
+| `list-shares.md` | Volume snapshot path → `context/nas/$SLUG/volumes/<vol>-snapshot.txt`; **ensure `mkdir -p context/nas/$SLUG/volumes` before writing** (the shipped `.gitkeep` dirs are gone after Task 10). |
+| `manage-mounts.md` | Mounts path → `context/nas/$SLUG/mounts/current.txt` (all references); **ensure `mkdir -p context/nas/$SLUG/mounts` before writing**. |
 | `logs.md` | Keep its existing `--source/--last/--grep` arg-parsing block; only the profile/SSH blocks are replaced. |
 | `dsm-update-check.md` | none. |
 | `docker-list.md` | none (`/usr/local/bin/docker` absolute path unchanged). |
@@ -505,36 +537,111 @@ Apply the **exact same transformation** as Task 5 to each command below: delete 
 | `compose-up.md` | none. |
 | `compose-logs.md` | none. |
 | `compose-update.md` | none. |
-| `compose-down.md` | **Preserve** its `critical_compose_projects` lazy-migration block AND its inline `is_critical_compose_project()` function. Only the `PROFILE=`/extraction/`SSH=` parts are replaced. The lazy-migration `awk ... > "$PROFILE"` now targets the resolved `$PROFILE` (= `context/nas/$SLUG/profile.md`); `CRIT_LIST` extraction stays, reading from `$PROFILE`. |
-| `diag.md` | Replace `[ -f context/nas-profile.md ]` with the resolver block; the "Profile present/missing" health line becomes "Active NAS resolvable" (success when the block resolves; failure message when it exits). |
+| `compose-down.md` | **Preserve** its `critical_compose_projects` lazy-migration block AND its inline `is_critical_compose_project()` function. Only the `PROFILE=`/extraction/`SSH=` parts are replaced. The lazy-migration `awk ... > "$PROFILE"` now targets the resolved `$PROFILE` (= `context/nas/$SLUG/profile.md`); `CRIT_LIST` extraction stays, reading from `$PROFILE`. **Order matters:** run the resolver block first (sets `$PROFILE`), then the `critical_compose_projects` lazy-migration that mutates `$PROFILE`. Also update the user-facing Tip string `…in nas-profile.md` → `…in context/nas/$SLUG/profile.md`. |
 
 - [ ] **Step 1:** Retrofit the no-special-handling group: `smart-status.md`, `dsm-update-check.md`, `docker-list.md`, `compose-list.md`, `compose-up.md`, `compose-logs.md`, `compose-update.md`.
 
 - [ ] **Step 2:** Retrofit the state-path group: `health-summary.md`, `list-shares.md`, `manage-mounts.md`.
 
-- [ ] **Step 3:** Retrofit the special cases: `logs.md` (preserve arg-parsing), `compose-down.md` (preserve critical-list logic + inline function), `diag.md` (rework profile health line).
+- [ ] **Step 3:** Retrofit the special cases: `logs.md` (preserve arg-parsing), `compose-down.md` (preserve critical-list logic + inline function).
 
 - [ ] **Step 4: Static checks for all**
 
 Run: `bash tests/static/shellcheck-commands.sh && bash tests/static/frontmatter-check.sh && bash tests/static/markdown-lint.sh`
-Expected: `PASS` for every command; exit 0. Fix any shellcheck warning by aligning the pasted block.
+Expected: `shellcheck-commands.sh` prints `PASS: <name>` for each; `frontmatter-check.sh` prints `PASS: <name>.md`; markdown-lint exits 0 with no per-file PASS. Fix any shellcheck warning by aligning the pasted block.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "refactor: route all read commands through the multi-NAS resolver" -- plugin/commands/smart-status.md plugin/commands/dsm-update-check.md plugin/commands/docker-list.md plugin/commands/compose-list.md plugin/commands/compose-up.md plugin/commands/compose-logs.md plugin/commands/compose-update.md plugin/commands/health-summary.md plugin/commands/list-shares.md plugin/commands/manage-mounts.md plugin/commands/logs.md plugin/commands/compose-down.md plugin/commands/diag.md
+git commit -m "refactor: route read commands through the multi-NAS resolver" -- plugin/commands/smart-status.md plugin/commands/dsm-update-check.md plugin/commands/docker-list.md plugin/commands/compose-list.md plugin/commands/compose-up.md plugin/commands/compose-logs.md plugin/commands/compose-update.md plugin/commands/health-summary.md plugin/commands/list-shares.md plugin/commands/manage-mounts.md plugin/commands/logs.md plugin/commands/compose-down.md
 ```
 
 ---
 
-## Task 7: `/first-run` — migration + per-NAS write + idempotency
+## Task 7: Retrofit `diag.md` (bespoke, non-fatal)
+
+`diag` must run all 7 checks even when no NAS is configured, so it CANNOT use the exit-on-failure resolver block. Replace only its extraction prelude with a non-fatal active-NAS resolver, and update Check 1 + Check 4's key path.
+
+**Files:**
+- Modify: `plugin/commands/diag.md`
+
+- [ ] **Step 1: Replace the `## Setup` extraction prelude bash block** (currently the `set -uo pipefail` … `PROFILE="context/nas-profile.md"` … block) with:
+
+```bash
+set -uo pipefail  # -e omitted on purpose; per-check error handling below
+
+# Resolve the active NAS profile WITHOUT aborting (diag must run all checks).
+PROFILE=""; SLUG=""; LEGACY=0
+HOST=""; PORT=""; NAS_USER=""; CONNECT_TIMEOUT=""
+KEY_PATH="$HOME/.ssh/synology-manager-plus_ed25519"
+
+if [ -f context/nas-profile.md ] && [ ! -d context/nas ]; then
+  LEGACY=1
+elif [ -d context/nas ]; then
+  ACTIVE=$(cat context/active-nas 2>/dev/null | head -1 || true)
+  ACTIVE="${ACTIVE%%[[:space:]]*}"
+  if [[ "$ACTIVE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] && [ -f "context/nas/$ACTIVE/profile.md" ]; then
+    PROFILE="context/nas/$ACTIVE/profile.md"; SLUG="$ACTIVE"
+  else
+    # No valid pointer: pick any configured NAS for diagnostics (last alphabetical
+    # wins). Unreachable in Phase 1 (only one NAS exists); Phase 2 adds /nas-use.
+    for d in context/nas/*/; do
+      [ -f "${d}profile.md" ] && { PROFILE="${d}profile.md"; SLUG="$(basename "$d")"; }
+    done
+  fi
+fi
+
+if [ -n "$PROFILE" ]; then
+  HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
+  PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
+  NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
+  CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
+  kp=$(awk '/^- key_path:/ {print $3; exit}' "$PROFILE")
+  [ -n "$kp" ] && KEY_PATH="${kp/#\~/$HOME}"
+  for field in host port user; do
+    if grep -qE "^- ${field}: _not configured_" "$PROFILE"; then
+      case $field in host) HOST="" ;; port) PORT="" ;; user) NAS_USER="" ;; esac
+    fi
+  done
+fi
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+```
+
+- [ ] **Step 2: Rewrite Check 1 ("Profile present")** to report on the resolver result instead of the flat file:
+
+```bash
+if [ "$LEGACY" -eq 1 ]; then
+  echo "FAIL Legacy single-NAS layout — run /first-run to migrate"
+elif [ -n "$PROFILE" ]; then
+  echo "OK Active NAS resolvable ($SLUG)"
+else
+  echo "FAIL No NAS configured — run /first-run"
+fi
+```
+
+- [ ] **Step 3: Check 4 — use the resolved key path.** In the `SSH_ARGS=( ... )` array, change `-i "$HOME/.ssh/synology-manager-plus_ed25519"` to `-i "$KEY_PATH"`. Keep `-o BatchMode=yes` and everything else. (Checks 2, 3, 5–7 are unchanged — they already use `$HOST/$PORT/$NAS_USER/$SSH_ARGS`.)
+
+- [ ] **Step 4: Update the `## Setup` prose** to say it resolves the active NAS (per-NAS layout) non-fatally, still setting empty vars on missing data so checks report `FAIL`/`WARN`/`OK`.
+
+- [ ] **Step 5: Static checks**
+
+Run: `bash tests/static/shellcheck-commands.sh && bash tests/static/frontmatter-check.sh && bash tests/static/markdown-lint.sh`
+Expected: `PASS: diag` / `PASS: diag.md`; exit 0.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git commit -m "refactor: diag resolves the active NAS non-fatally across all checks" -- plugin/commands/diag.md
+```
+
+---
+
+## Task 8: `/first-run` — migration + per-NAS write + idempotency
 
 **Files:**
 - Modify: `plugin/commands/first-run.md`
 
-- [ ] **Step 1: Add a migration step at the very top of the command body**
-
-Before "Step 2. Detect existing config", add "Step 0. Migrate legacy layout (one-time)" with this bash block (inline equivalent of `smp_migrate` + `smp_derive_slug`; mirrors `_profile-lib.sh`):
+- [ ] **Step 1: Add "Step 0. Migrate legacy layout (one-time)"** before "Step 2. Detect existing config", with this block (inline equivalent of `smp_migrate` + `smp_derive_slug`; mirrors `_profile-lib.sh`, including the staging cleanup):
 
 ```bash
 set -euo pipefail
@@ -559,24 +666,24 @@ if ! { [[ "$smp_active" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] && [ -f "context/nas/$sm
   mv "context/.nas-migrate.tmp/$smp_slug" "context/nas/$smp_slug"
   smp_tmp=$(mktemp); printf '%s\n' "$smp_slug" > "$smp_tmp" && mv "$smp_tmp" context/active-nas
   rm -f context/nas-profile.md context/storage-report.md
-  rm -rf context/volumes context/mounts
+  rm -rf context/volumes context/mounts context/.nas-migrate.tmp
   echo "[migration] single-NAS workspace migrated to context/nas/$smp_slug/"
 fi
 ```
 
 - [ ] **Step 2: Change profile write target + idempotency detection**
 
-- Step 2 ("Detect existing config"): detect via `context/active-nas` + `context/nas/<slug>/profile.md` (NOT `context/nas-profile.md`). If configured, ask Refresh/Cancel as today.
-- Step 7 ("Write context files"): write the profile to `context/nas/<slug>/profile.md` (derive `<slug>` from discovered hostname using the same normalize+validate logic, fallback `main`); set `context/active-nas` to that slug atomically. Keep `- key_path: ~/.ssh/synology-manager-plus_ed25519` for the first NAS. Volumes → `context/nas/<slug>/volumes/volume1-snapshot.txt`; mounts → `context/nas/<slug>/mounts/current.txt`.
+- Step 2 ("Detect existing config"): detect via `context/active-nas` + `context/nas/<slug>/profile.md` (NOT `context/nas-profile.md`). If a configured NAS exists, ask Refresh/Cancel as today.
+- Step 7 ("Write context files"): write the profile to `context/nas/<slug>/profile.md`, deriving `<slug>` from the discovered hostname with the exact normalize+validate logic from Step 0 (fallback `main`); set `context/active-nas` to that slug atomically (`mktemp` + `mv`). Keep `- key_path: ~/.ssh/synology-manager-plus_ed25519` for the first NAS. **Create the subdirs first: `mkdir -p context/nas/<slug>/volumes context/nas/<slug>/mounts`** (the shipped `.gitkeep` dirs are gone after Task 10). Volumes → `context/nas/<slug>/volumes/volume1-snapshot.txt`; mounts → `context/nas/<slug>/mounts/current.txt`.
 
 - [ ] **Step 3: CLAUDE.md managed section (Phase-1 form)**
 
-Render the same Quick Reference table as today. **Do NOT add the `Active NAS:` header or the `(see /nas-list ...)` hint** — `/nas-list` does not exist until Phase 2 (spec R2-2). Leave the marker-count safety logic unchanged.
+Render the same Quick Reference table as today. **Do NOT add the `Active NAS:` header or `(see /nas-list ...)` hint** — `/nas-list` does not exist until Phase 2 (spec R2-2). Leave the marker-count safety logic unchanged.
 
 - [ ] **Step 4: Static checks**
 
 Run: `bash tests/static/shellcheck-commands.sh && bash tests/static/frontmatter-check.sh && bash tests/static/markdown-lint.sh`
-Expected: `PASS: first-run`; exit 0.
+Expected: `PASS: first-run` / `PASS: first-run.md`; exit 0.
 
 - [ ] **Step 5: Commit**
 
@@ -586,22 +693,50 @@ git commit -m "feat: first-run migrates legacy layout and writes per-NAS profile
 
 ---
 
-## Task 8: `/setup-ssh` — NAS-relative profile
+## Task 9: `/setup-ssh` — concrete NAS-relative read/write
 
 **Files:**
 - Modify: `plugin/commands/setup-ssh.md`
 
-- [ ] **Step 1: Resolve + write the active NAS profile**
+`setup-ssh` reads connection details (steps 1, 3) and writes them (step 5). Make the layout-resolution concrete.
 
-- Step 1: resolve the active profile path. If `context/active-nas` + `context/nas/<slug>/profile.md` exist, read from there; if legacy `context/nas-profile.md` exists with no per-NAS layout, print the legacy hint and tell the user to run `/first-run`; if nothing exists, ask (as today) and target `context/nas/main/profile.md` with `context/active-nas=main`.
-- Step 5 (on success): write/update `context/nas/<slug>/profile.md` instead of `context/nas-profile.md`, preserving the `key_path`/`connect_timeout_seconds` rules.
+- [ ] **Step 1: Step 1 — resolve where to read/write the profile**
 
-- [ ] **Step 2: Static checks**
+Add an explicit resolution block: determine `TARGET_PROFILE` and `SLUG`:
+
+```bash
+set -euo pipefail
+if [ -f context/nas-profile.md ] && [ ! -d context/nas ]; then
+  echo "Legacy single-NAS layout detected — run /first-run to upgrade before /setup-ssh." >&2
+  exit 1
+fi
+ACTIVE=$(cat context/active-nas 2>/dev/null | head -1 || true)
+ACTIVE="${ACTIVE%%[[:space:]]*}"
+if [[ "$ACTIVE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] && [ -f "context/nas/$ACTIVE/profile.md" ]; then
+  SLUG="$ACTIVE"
+else
+  SLUG="main"   # fresh setup: first NAS
+fi
+TARGET_PROFILE="context/nas/$SLUG/profile.md"
+mkdir -p "context/nas/$SLUG"
+```
+
+Then: if `$TARGET_PROFILE` exists, read `host`/`port`/`NAS_USER`/`CONNECT_TIMEOUT` from it (same `awk` lines as the resolver); otherwise prompt via `AskUserQuestion` (as today) and validate with the existing regexes.
+
+- [ ] **Step 2: Key path — Phase 1 keeps the legacy key name**
+
+Step 2's keypair (`$HOME/.ssh/synology-manager-plus_ed25519`) and step 3's test stay as-is. The first NAS's `key_path` is the legacy name (NG6), so this is consistent. (Per-NAS keys arrive in Phase 2 with `/nas-add`.)
+
+- [ ] **Step 3: Step 5 — write to the per-NAS profile**
+
+On successful re-verify, write/update `$TARGET_PROFILE` (instead of `context/nas-profile.md`) with `host`/`port`/`user`/`key_path: ~/.ssh/synology-manager-plus_ed25519`/`connect_timeout_seconds` (preserve existing override) + `Last Updated`. Then ensure `context/active-nas` contains `$SLUG` (atomic write) so the new profile is active.
+
+- [ ] **Step 4: Static checks**
 
 Run: `bash tests/static/shellcheck-commands.sh && bash tests/static/frontmatter-check.sh && bash tests/static/markdown-lint.sh`
-Expected: `PASS: setup-ssh`; exit 0.
+Expected: `PASS: setup-ssh` / `PASS: setup-ssh.md`; exit 0.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git commit -m "refactor: setup-ssh reads and writes the per-NAS profile" -- plugin/commands/setup-ssh.md
@@ -609,16 +744,53 @@ git commit -m "refactor: setup-ssh reads and writes the per-NAS profile" -- plug
 
 ---
 
-## Task 9: Keep integration smoke tests green
+## Task 10: Update shipped `plugin/context/` scaffolding (fresh-install correctness)
 
-The 18 integration smoke tests reimplement command logic against the Mock-NAS and write the profile to `$HOME/nas-profile.md` (they do **not** exec the command markdown), so the retrofit does not break them.
+The plugin ships a populated `context/` workspace. Today it ships a **flat** `nas-profile.md` (all placeholders) + `storage-report.md` + `volumes/.gitkeep` + `mounts/.gitkeep`. After the retrofit, a brand-new install would have a legacy flat file and no `context/nas/`, so every command would hit "Legacy single-NAS layout detected" before the user configures anything. Fix the shipped scaffolding so a fresh install lands on the clean "No NAS configured. Run /first-run." path.
+
+**Files:**
+- Delete: `plugin/context/nas-profile.md`, `plugin/context/storage-report.md`, `plugin/context/volumes/.gitkeep`, `plugin/context/mounts/.gitkeep`
+- Create: `plugin/context/nas/.gitkeep`
+
+- [ ] **Step 1: Replace the scaffolding**
+
+```bash
+git rm plugin/context/nas-profile.md plugin/context/storage-report.md plugin/context/volumes/.gitkeep plugin/context/mounts/.gitkeep
+mkdir -p plugin/context/nas
+: > plugin/context/nas/.gitkeep
+```
+
+(If `git rm` is blocked by the hook, `rm` the files and `: > plugin/context/nas/.gitkeep` manually.)
+
+- [ ] **Step 2: Verify fresh-install resolution behaves correctly**
+
+With the new scaffolding, `context/nas/` exists (via `.gitkeep`) and is empty → the resolver's empty-fallback prints "No NAS configured. Run /first-run." (NOT the legacy hint). Confirm by simulating in a temp copy:
+
+Run (capture the lib's absolute path BEFORE `cd`, or it resolves into the temp dir):
+```bash
+LIB="$PWD/plugin/commands/_profile-lib.sh"; tmp=$(mktemp -d); cp -r plugin/context "$tmp/context"
+( cd "$tmp"; bash -c "source '$LIB'; smp_active_nas; echo \"exit=\$?\"" 2>&1 ); rm -rf "$tmp"
+```
+Expected: `No NAS configured. Run /first-run.` and `exit=1` — NOT the "Legacy" message and NOT a 127 "command not found".
+
+- [ ] **Step 3: Commit**
+
+```bash
+git commit -m "chore: ship empty per-NAS context scaffolding for fresh installs" -- plugin/context/
+```
+
+---
+
+## Task 11: Keep integration smoke tests green
+
+The 18 integration smoke tests reimplement command logic against the Mock-NAS and write the profile to `$HOME/nas-profile.md`; they do **not** exec the command markdown (verified: `run_command_snippets`/`extract_command_bash` are defined in `test-helpers.sh` but used by no test), so the retrofit does not break them.
 
 **Files:**
 - Modify: `tests/integration/lib/test-helpers.sh`
 
 - [ ] **Step 1: Add a `hostname` line to `write_test_profile`**
 
-In the heredoc inside `write_test_profile`, add a `## Software` section with `- hostname: mocknas` so any test that exercises migration derives a deterministic slug (`mocknas`).
+In the heredoc inside `write_test_profile`, add a `## Software` section with `- hostname: mocknas` so any future test that exercises migration derives a deterministic slug (`mocknas`).
 
 - [ ] **Step 2: Run the full suite if Docker is available**
 
@@ -633,15 +805,39 @@ git commit -m "test: include hostname in test profile for deterministic migratio
 
 ---
 
-## Task 10: Docs + version bump
+## Task 12: Update stale flat-path docs
+
+After the retrofit the canonical paths are `context/nas/<slug>/...`. README prose and the plugin's own agent-facing `CLAUDE.md` still reference the flat paths and would misdirect.
+
+**Files:**
+- Modify: `README.md`, `plugin/CLAUDE.md`
+
+- [ ] **Step 1: README.md** — update the flat-path references (`context/nas-profile.md`, `context/volumes/`, `context/mounts/`, `context/storage-report.md`) to the per-NAS layout, and reword the migration/first-steps note to mention that `/first-run` creates `context/nas/<slug>/`. Do **not** add Phase-2 commands to the command table (those are deferred).
+
+- [ ] **Step 2: plugin/CLAUDE.md** — in "Operational Guidelines", change "Check `context/nas-profile.md`" → "Resolve the active NAS (`context/active-nas` → `context/nas/<slug>/profile.md`)" and "refresh `context/storage-report.md`" → "refresh `context/nas/<slug>/storage-report.md`". Leave the managed-section markers and Quick Reference table structure unchanged.
+
+- [ ] **Step 3: Static check**
+
+Run: `bash tests/static/markdown-lint.sh`
+Expected: exit 0.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git commit -m "docs: update context paths to the per-NAS layout" -- README.md plugin/CLAUDE.md
+```
+
+---
+
+## Task 13: Changelog + version bump
 
 **Files:**
 - Modify: `CHANGELOG.md`, `plugin/.claude-plugin/plugin.json`
 
-- [ ] **Step 1: Add a CHANGELOG entry** (plain, factual; no "phase", no AI phrasing)
+- [ ] **Step 1: Add a CHANGELOG entry** (match the file's em-dash style `## [x] — date`; plain wording, no "phase", no AI phrasing)
 
 ```markdown
-## [0.5.0] - 2026-05-29
+## [0.5.0] — 2026-05-29
 
 ### Added
 - Per-NAS profile layout (`context/nas/<slug>/`) and an active-NAS pointer, preparing the plugin to manage multiple Synology NAS.
@@ -656,7 +852,7 @@ git commit -m "test: include hostname in test profile for deterministic migratio
 - Existing single-NAS users: run `/first-run` once after updating to migrate to the new layout. Single-NAS behaviour is otherwise unchanged.
 ```
 
-- [ ] **Step 2: Bump the version in `plugin.json`** → `"version": "0.5.0"` (must match the CHANGELOG header — `validate-manifests.sh` enforces).
+- [ ] **Step 2: Bump the version in `plugin.json`** → `"version": "0.5.0"` (must match the CHANGELOG header — `validate-manifests.sh` greps `## \[0.5.0\]`, separator-agnostic).
 
 - [ ] **Step 3: Validate manifests**
 
@@ -678,18 +874,21 @@ git commit -m "chore: bump version to 0.5.0 with multi-NAS foundation changelog"
 
 ## Final Verification (Phase 1 acceptance)
 
-- [ ] `bash tests/unit/test-profile-lib.sh` → all PASS.
+- [ ] `bash tests/unit/test-profile-lib.sh` → every line PASS, `0 fail`, exit 0. **Zero `FAIL:` lines.**
 - [ ] `for s in tests/static/*.sh; do bash "$s" || exit 1; done` → all PASS (incl. `_profile-lib.sh` + `_compose-lib.sh` shellchecked).
+- [ ] Fresh-install check (Task 10 Step 2): a clean shipped `context/` resolves to "No NAS configured. Run /first-run." — not the legacy hint.
 - [ ] `bash tests/integration/run-all.sh` (or CI) → unit + 18 integration tests PASS.
-- [ ] Manual real-hardware check (DS218+): with a legacy `context/nas-profile.md`, run `/first-run` once → workspace migrated to `context/nas/<slug>/`, `context/active-nas` set, `/nas-status` and `/health-summary` behave exactly as before.
+- [ ] Manual real-hardware check (DS218+): with a legacy `context/nas-profile.md`, run `/first-run` once → migrated to `context/nas/<slug>/`, `context/active-nas` set, `context/.nas-migrate.tmp` gone, `/nas-status` + `/health-summary` + `/diag` behave as before.
 - [ ] Spec Phase-1 acceptance checklist (Sec 10) all satisfied.
 
 ---
 
 ## Self-Review notes (gaps the implementer must watch)
 
-- **Inline/lib drift:** the resolver block (Task 4) and `_profile-lib.sh` (Task 1) must stay logically equivalent. Change one → change both → re-run Task 2.
-- **`compose-down` is the trickiest retrofit:** preserve the `critical_compose_projects` lazy migration AND the inline `is_critical_compose_project()`; only swap profile-extraction/SSH parts.
-- **Migration runs only in `/first-run`:** every other command merely *detects* the legacy layout and tells the user to run `/first-run`. Do not paste the migration block into the 14 read commands.
+- **Inline/lib drift:** the resolver block (Task 4), the diag prelude (Task 7), the first-run migration (Task 8), and `_profile-lib.sh` (Task 1) must stay logically equivalent. Change one → change the others → re-run Task 2. The block and lib now share identical legacy-message semantics (no top-level short-circuit in the block).
+- **`diag` is non-fatal by design:** never paste the exit-on-failure resolver block into it (Task 7 is bespoke).
+- **`compose-down` is the trickiest bulk retrofit:** preserve the `critical_compose_projects` lazy migration AND the inline `is_critical_compose_project()`; resolver block runs first (sets `$PROFILE`), then the lazy migration mutates `$PROFILE`.
+- **Migration runs only in `/first-run`:** every other command merely *detects* the legacy layout and tells the user to run `/first-run`.
+- **Fresh install vs migration:** Task 10 makes a fresh install land on "No NAS configured" (clean); an existing user's configured legacy file triggers migration via `/first-run`. Both paths verified.
 - **CLAUDE.md `/nas-list` hint is Phase 2:** do not reference `/nas-list` anywhere user-visible in Phase 1.
-- **Profiles that predate `hostname`:** the migration treats a missing/`_not configured_` hostname as empty → slug `main`. Real migrated profiles keep their `key_path` (`synology-manager-plus_ed25519`) unchanged (NG6).
+- **shellcheck SC2034:** the lib uses per-function disable directives; the inline block relies on the `shellcheck-commands.sh` wrapper's `SC2154,SC2034` disable. A bare shellcheck of the isolated block reporting SC2034 on `SSH` is expected, not a bug.
