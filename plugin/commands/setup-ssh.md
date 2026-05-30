@@ -15,7 +15,36 @@ Establish passwordless SSH key authentication to the Synology NAS using a plugin
 
 ### 1. Determine connection details
 
-Read `context/nas-profile.md`. Extract `host`, `port`, `NAS_USER` (note: NOT `$USER` — that one is the local Linux login user and would silently shadow). If any are `_not configured_`, ask via `AskUserQuestion`:
+First, resolve where to read and write the profile:
+
+```bash
+set -euo pipefail
+if [ -f context/nas-profile.md ] && [ ! -d context/nas ]; then
+  echo "Legacy single-NAS layout detected — run /first-run to upgrade before /setup-ssh." >&2
+  exit 1
+fi
+ACTIVE=$(cat context/active-nas 2>/dev/null | head -1 || true)
+ACTIVE="${ACTIVE%%[[:space:]]*}"
+if [[ "$ACTIVE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] && [ -f "context/nas/$ACTIVE/profile.md" ]; then
+  SLUG="$ACTIVE"
+else
+  SLUG="main"   # fresh setup: first NAS
+fi
+TARGET_PROFILE="context/nas/$SLUG/profile.md"
+mkdir -p "context/nas/$SLUG"
+```
+
+If `$TARGET_PROFILE` exists, extract `host`, `port`, `NAS_USER` (note: NOT `$USER` — that one is the local Linux login user and would silently shadow), and `CONNECT_TIMEOUT` from it:
+
+```bash
+HOST=$(awk '/^- host:/ {print $3; exit}' "$TARGET_PROFILE")
+PORT=$(awk '/^- port:/ {print $3; exit}' "$TARGET_PROFILE")
+NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$TARGET_PROFILE")
+CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$TARGET_PROFILE")
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+```
+
+If `$TARGET_PROFILE` does not exist, or if any extracted value is `_not configured_` or empty, prompt via `AskUserQuestion`:
 
 - "What is the NAS host (LAN IP, hostname, or WAN domain)?"
 - "What is the SSH port? (Default: 22)"
@@ -72,11 +101,19 @@ Do NOT auto-poll. Wait for explicit confirmation.
 
 Run the same SSH test as step 3 (with `BatchMode=yes`).
 
-- On success: write/update `context/nas-profile.md` with:
+- On success: write/update `$TARGET_PROFILE` (`context/nas/$SLUG/profile.md`) with:
   - `host`, `port`, `user`
   - `key_path: ~/.ssh/synology-manager-plus_ed25519`
   - `connect_timeout_seconds: 10` (only if missing — preserve existing override)
   - `Last Updated: <ISO 8601 UTC>`
+
+  Then ensure `context/active-nas` contains `$SLUG` (atomic write):
+
+  ```bash
+  _smp_tmp=$(mktemp)
+  printf '%s\n' "$SLUG" > "$_smp_tmp" && mv "$_smp_tmp" context/active-nas
+  ```
+
 - On failure: print a clear error listing the three most common causes:
   1. SSH service not enabled in DSM (Control Panel → Terminal & SNMP → Enable SSH).
   2. Wrong port — check DSM SSH settings.

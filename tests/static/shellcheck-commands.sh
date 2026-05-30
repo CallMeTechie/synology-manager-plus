@@ -40,6 +40,18 @@ for md in "$COMMANDS_DIR"/*.md; do
   fi
 done
 
+# Also lint the shared *.sh libraries directly (the *.md loop above only covers
+# extracted command snippets; the libs are real scripts and must pass on their own).
+for lib in "$COMMANDS_DIR"/_*.sh; do
+  [ -f "$lib" ] || continue
+  if shellcheck --severity=warning --shell=bash "$lib"; then
+    echo "PASS: $(basename "$lib")"
+  else
+    echo "FAIL: $(basename "$lib") (see shellcheck output above)"
+    fail_count=$((fail_count + 1))
+  fi
+done
+
 if [ $fail_count -gt 0 ]; then
   echo "$fail_count command(s) failed shellcheck."
   exit 1
