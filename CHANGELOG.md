@@ -3,6 +3,57 @@
 All notable changes to synology-manager-plus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] — 2026-06-12
+
+### Added
+
+- `/setup-docker-sudo` — guided passwordless docker-sudo setup via the DSM Task Scheduler, with a `visudo`-validated, atomic, busybox-safe root script and self-verification through a result marker.
+- `_sudo-lib.sh` (unit-tested) with `smp_classify_docker_info`, `smp_docker_sudo_probe`, `smp_render_sudoers_script`, `smp_user_is_admin_probe`.
+- `/first-run` now sets up docker-sudo after the atomic profile write (resumable) and records `sudo_checked_at`.
+
+### Fixed
+
+- `sudo_passwordless` probe tested global sudo (`sudo -n true`), which fails under a docker-scoped `NOPASSWD` drop-in. It now probes `/usr/local/bin/docker` specifically and is `n/a` when Docker is absent.
+
+## [0.7.0] — 2026-05-30
+
+### Added
+
+- `--all` flag on `/health-summary`, `/smart-status`, and `/nas-status` — sweep every configured NAS sequentially with a per-NAS reachability probe and a worst-of fleet verdict.
+- `smp_verdict_rank` helper in `_profile-lib.sh` (unit-tested) for worst-of aggregation.
+
+### Changed
+
+- The three overview commands are restructured around a per-NAS `load_nas`/`run_body` so the active-NAS (no-flag) behaviour is unchanged while `--all` fans out.
+
+## [0.6.0] — 2026-05-30
+
+### Added
+
+- `/nas-list`, `/nas-use`, `/nas-add`, `/nas-remove` — manage multiple Synology NAS profiles and switch the active one.
+- `smp_repoint_active` helper in `_profile-lib.sh` (unit-tested) for active-pointer repointing on removal.
+
+### Changed
+
+- `/first-run` renders the workspace Quick Reference with an `Active NAS` header and `/nas-list` hint.
+
+## [0.5.0] — 2026-05-29
+
+### Added
+
+- Per-NAS profile layout (`context/nas/<slug>/`) and an active-NAS pointer, preparing the plugin to manage multiple Synology NAS.
+- Canonical, unit-tested NAS resolver (`plugin/commands/_profile-lib.sh`) mirrored inline by every command.
+- One-time, lossless, resumable migration of existing single-NAS workspaces, performed by `/first-run`.
+
+### Changed
+
+- All profile-reading commands resolve the active NAS and write state under `context/nas/<slug>/`.
+- `tests/static/shellcheck-commands.sh` now lints the shared `_*.sh` libraries directly.
+
+### Notes
+
+- Existing single-NAS users: run `/first-run` once after updating to migrate to the new layout. Single-NAS behaviour is otherwise unchanged.
+
 ## [0.4.1] — 2026-05-23
 
 ### Fixed

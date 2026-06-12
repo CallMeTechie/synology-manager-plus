@@ -42,12 +42,13 @@ claude plugin install synology-manager-plus@synology-manager-plus
 |---|---|
 |`/first-run`|Interactive setup wizard (one-time, idempotent)|
 |`/setup-ssh`|Standalone SSH key setup|
+|`/setup-docker-sudo`|Guided passwordless docker-sudo setup via DSM Task Scheduler|
 |`/diag`|7-point health check (read-only)|
-|`/nas-status`|Disk usage, RAID, services, load|
+|`/nas-status`|Disk usage, RAID, services, load (`--all` for fleet view)|
 |`/list-shares`|List shared folders, refresh volume snapshots|
 |`/manage-mounts`|View/add/remove NFS or SMB mounts|
-|`/smart-status`|SMART health per disk (text-parsing, smartctl 6.5)|
-|`/health-summary`|One-page NAS health aggregate|
+|`/smart-status`|SMART health per disk (text-parsing, smartctl 6.5) (`--all` for fleet view)|
+|`/health-summary`|One-page NAS health aggregate (`--all` for fleet view)|
 |`/logs`|Filterable log viewer (system/ssh/package/docker)|
 |`/dsm-update-check`|Read-only DSM update status|
 |`/compose-list`|List all Compose projects (running + stopped)|
@@ -56,6 +57,22 @@ claude plugin install synology-manager-plus@synology-manager-plus
 |`/compose-up`|Start a stopped Compose stack|
 |`/compose-down`|Stop a Compose stack (with critical-project whitelist)|
 |`/compose-update`|Pull + restart a Compose stack atomically|
+|`/nas-list`|List configured NAS, mark active|
+|`/nas-use`|Switch the active NAS|
+|`/nas-add`|Add another NAS (own key + discovery)|
+|`/nas-remove`|Remove a NAS profile|
+
+## Managing multiple NAS
+
+The plugin tracks one **active NAS** (`context/active-nas`); every command targets it
+by default. Each NAS lives under `context/nas/<slug>/`, with its own SSH key.
+
+- `/nas-list` — show all configured NAS and which is active.
+- `/nas-add` — add another NAS (prompts for a slug, generates a dedicated key, discovers hardware).
+- `/nas-use <slug>` — switch the active NAS; the workspace Quick Reference updates to match.
+- `/nas-remove <slug>` — delete a NAS profile (optionally its key), with confirmation.
+
+Read-only overviews accept `--all` to sweep every configured NAS with a fleet verdict.
 
 ## Migration from `danielrosehill/synology-manager-plugin`
 
@@ -65,7 +82,7 @@ claude plugin marketplace add CallMeTechie/synology-manager-plus
 claude plugin install synology-manager-plus@synology-manager-plus
 ```
 
-If your old plugin had a populated `context/` directory with snapshots, copy them manually into the new plugin workspace's `context/volumes/` and `context/mounts/` — the new install starts blank and `/first-run` will refill the rest.
+If your old plugin had a populated `context/` directory with snapshots, copy them manually into the new plugin workspace's `context/nas/<slug>/volumes/` and `context/nas/<slug>/mounts/` — the new install starts blank and `/first-run` creates `context/nas/<slug>/` and refills the rest.
 
 ## Troubleshooting
 
@@ -73,13 +90,13 @@ If your old plugin had a populated `context/` directory with snapshots, copy the
 Make sure you typed the command with `!` at the start. Without `!`, Claude tries to run it as a normal Bash call, which has no terminal for password entry and hangs. The `!` opens an interactive terminal where the password prompt actually works.
 
 **`/diag` says SSH is unreachable, but I can SSH manually.**
-Check `connect_timeout_seconds` in `context/nas-profile.md`. Default is 10. For VPN tunnels with cold-start latency, raise it to 20–30. Range 3–60.
+Check `connect_timeout_seconds` in `context/nas/<slug>/profile.md`. Default is 10. For VPN tunnels with cold-start latency, raise it to 20–30. Range 3–60.
 
 **Re-running `/first-run` deleted my notes in `CLAUDE.md`.**
 Notes outside the `<!-- synology-manager-plus:managed-start -->` and `:managed-end` markers are protected. If your CLAUDE.md does not have those markers (e.g. migrated from upstream), `/first-run` shows you a diff and asks before touching anything.
 
 **`/smart-status` says "SMART support: Unavailable" or all disks fall to the schema-drift path.**
-DSM ships smartmontools 6.5 and identifies SATA disks via `--scan` as SCSI, which doesn't return SMART attributes. Set `smartctl_device_type: ata` (or `sat` on newer drives) in `context/nas-profile.md` under `## Hardware`. The plugin uses this hint via `smartctl -d <type>` for every disk read.
+DSM ships smartmontools 6.5 and identifies SATA disks via `--scan` as SCSI, which doesn't return SMART attributes. Set `smartctl_device_type: ata` (or `sat` on newer drives) in `context/nas/<slug>/profile.md` under `## Hardware`. The plugin uses this hint via `smartctl -d <type>` for every disk read.
 
 **`/smart-status` or `/dsm-update-check` need a password.**
 Both commands need passwordless sudo for `smartctl` and `synoupgrade`. DSM has no `visudo`, so use a sudoers drop-in:
@@ -117,6 +134,13 @@ For DSM users already in `administrators` (which is `(ALL) ALL`),
 the NOPASSWD override only adds **passwordless** access for docker —
 it does not expand what the user could already do.
 
+**Docker commands say "a password is required".**
+
+Passwordless sudo for `/usr/local/bin/docker` is missing (DSM updates wipe the
+`sudoers.d` drop-in). Run `/setup-docker-sudo` — it generates a root script, walks
+you through the DSM Task Scheduler (the only reliable way to run a one-off root
+script on DSM), and verifies the result.
+
 **`/compose-update` aborts with ".env unreadable".**
 On DSM, Compose projects created via Container-Manager UI sometimes
 leave the `.env` as `root:root` mode `600`. The plugin fails loud
@@ -131,7 +155,7 @@ sudo chown :docker /volume1/docker/<project>/.env
 
 **`/compose-down` won't stop my project even with `<project>` argument.**
 The project is in `critical_compose_projects` whitelist. Either remove
-it from `context/nas-profile.md`, or invoke with
+it from `context/nas/<slug>/profile.md`, or invoke with
 `SM_CONFIRM_CRITICAL=yes` as an environment variable. Critical projects
 are protected from accidental `down`.
 

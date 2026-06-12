@@ -9,7 +9,7 @@ Run a 7-point health check. No file writes, no state mutation.
 
 ## Setup
 
-`/diag` is read-only and must not exit early — it continues past failures so the user sees every check. Therefore the extraction here is gentler than in `/nas-status`: it sets variables to empty strings on missing data, and the per-check assertions below decide what's a `FAIL` versus `WARN` versus `OK`.
+`/diag` is read-only and must not exit early — it resolves the active NAS (per-NAS layout) non-fatally, setting all variables to empty strings on missing or unconfigured data. The per-check assertions below decide what is a `FAIL` versus `WARN` versus `OK`.
 
 Use `NAS_USER`, NOT `$USER` — `$USER` is the local Linux login user.
 
@@ -18,22 +18,37 @@ This command intentionally does NOT use `set -e` — every check must run to com
 ```bash
 set -uo pipefail  # -e omitted on purpose; per-check error handling below
 
-PROFILE="context/nas-profile.md"
+# Resolve the active NAS profile WITHOUT aborting (diag must run all checks).
+PROFILE=""; SLUG=""; LEGACY=0
 HOST=""; PORT=""; NAS_USER=""; CONNECT_TIMEOUT=""
+KEY_PATH="$HOME/.ssh/synology-manager-plus_ed25519"
 
-if [ -f "$PROFILE" ]; then
+if [ -f context/nas-profile.md ] && [ ! -d context/nas ]; then
+  LEGACY=1
+elif [ -d context/nas ]; then
+  ACTIVE=$(cat context/active-nas 2>/dev/null | head -1 || true)
+  ACTIVE="${ACTIVE%%[[:space:]]*}"
+  if [[ "$ACTIVE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] && [ -f "context/nas/$ACTIVE/profile.md" ]; then
+    PROFILE="context/nas/$ACTIVE/profile.md"; SLUG="$ACTIVE"
+  else
+    # No valid pointer: pick any configured NAS for diagnostics (last alphabetical
+    # wins). Unreachable in Phase 1 (only one NAS exists); Phase 2 adds /nas-use.
+    for d in context/nas/*/; do
+      [ -f "${d}profile.md" ] && { PROFILE="${d}profile.md"; SLUG="$(basename "$d")"; }
+    done
+  fi
+fi
+
+if [ -n "$PROFILE" ]; then
   HOST=$(awk '/^- host:/ {print $3; exit}' "$PROFILE")
   PORT=$(awk '/^- port:/ {print $3; exit}' "$PROFILE")
   NAS_USER=$(awk '/^- user:/ {print $3; exit}' "$PROFILE")
   CONNECT_TIMEOUT=$(awk '/^- connect_timeout_seconds:/ {print $3; exit}' "$PROFILE")
-  # Treat placeholder values as empty so check 2 reports incomplete.
+  kp=$(awk '/^- key_path:/ {print $3; exit}' "$PROFILE")
+  [ -n "$kp" ] && KEY_PATH="${kp/#\~/$HOME}"
   for field in host port user; do
     if grep -qE "^- ${field}: _not configured_" "$PROFILE"; then
-      case $field in
-        host) HOST="" ;;
-        port) PORT="" ;;
-        user) NAS_USER="" ;;
-      esac
+      case $field in host) HOST="" ;; port) PORT="" ;; user) NAS_USER="" ;; esac
     fi
   done
 fi
@@ -47,7 +62,13 @@ Each check prints `OK`, `WARN`, or `FAIL` followed by a one-line status. Continu
 ### 1. Profile present
 
 ```bash
-[ -f context/nas-profile.md ] && echo "OK Profile present" || echo "FAIL Profile missing — run /first-run"
+if [ "$LEGACY" -eq 1 ]; then
+  echo "FAIL Legacy single-NAS layout — run /first-run to migrate"
+elif [ -n "$PROFILE" ]; then
+  echo "OK Active NAS resolvable ($SLUG)"
+else
+  echo "FAIL No NAS configured — run /first-run"
+fi
 ```
 
 ### 2. Profile complete
@@ -81,7 +102,7 @@ fi
 ```bash
 KEY_AUTH_OK=0
 SSH_ARGS=(
-  -i "$HOME/.ssh/synology-manager-plus_ed25519"
+  -i "$KEY_PATH"
   -o BatchMode=yes
   -o ConnectTimeout="${CONNECT_TIMEOUT:-10}"
   -p "$PORT"

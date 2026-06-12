@@ -17,8 +17,6 @@ HOSTNAME_VAL=$(ssh_mock "cat /proc/sys/kernel/hostname")
 ARCH=$(ssh_mock "uname -m")
 MODEL=$(ssh_mock "grep -E 'upnpmodelname' /etc/synoinfo.conf | head -1 | cut -d= -f2 | tr -d '\"'")
 VOL1_LIST=$(ssh_mock "ls /volume1/")
-SUDO_OK=$(ssh_mock "sudo -n true 2>/dev/null && echo yes || echo no")
-
 [[ "$DSM_VERSION" == *"productversion"* ]] || { echo "FAIL: DSM version not extracted"; exit 1; }
 echo "PASS: DSM_VERSION captured"
 
@@ -29,8 +27,23 @@ echo "PASS: model captured ($MODEL)"
   || { echo "FAIL: volume1 listing missing test shares"; exit 1; }
 echo "PASS: all three test shares present"
 
-assert_eq "yes" "$SUDO_OK" "sudo passwordless"
-echo "PASS: sudo NOPASSWD detected"
+# Scenario S: sudo probe must use the docker-specific payload, NOT `sudo -n true`.
+# Regression guard: extract the REAL payload from first-run.md, verify its shape
+# (must reference /usr/local/bin/docker info and not bare sudo -n true), then run
+# it via ssh_mock — so this test fails again if anyone reverts the probe.
+# Mock state: NOPASSWD:ALL sudoers + /usr/local/bin/docker info exits 0 (state=up
+# default) → probe returns "yes".
+echo "--- Scenario S: sudo probe mirrors docker-specific payload from first-run.md ---"
+FIRST_RUN_MD="$SCRIPT_DIR/../../plugin/commands/first-run.md"
+SUDO_PAYLOAD=$(grep -F 'discover sudo "' "$FIRST_RUN_MD" | sed -E 's/^.*discover sudo "(.*)"\)$/\1/')
+[ -n "$SUDO_PAYLOAD" ] || { echo "FAIL S: could not extract sudo-discovery payload from first-run.md"; exit 1; }
+[[ "$SUDO_PAYLOAD" == *"/usr/local/bin/docker info"* ]] \
+  || { echo "FAIL S: sudo payload does not reference /usr/local/bin/docker info; got '$SUDO_PAYLOAD'"; exit 1; }
+[[ "$SUDO_PAYLOAD" != *"sudo -n true"* ]] \
+  || { echo "FAIL S: sudo payload still uses the stale 'sudo -n true' probe"; exit 1; }
+SUDO_OK=$(ssh_mock "$SUDO_PAYLOAD")
+assert_eq "yes" "$SUDO_OK" "sudo passwordless docker info"
+echo "PASS S: sudo probe is docker-specific and passwordless docker-sudo detected"
 
 # Scenario E: docker discovery must resolve via the ABSOLUTE path.
 # Regression for the DSM bug: a non-interactive SSH session does not source
@@ -39,7 +52,7 @@ echo "PASS: sudo NOPASSWD detected"
 # the REAL discovery payload extracted from the command file — so this test
 # fails again if anyone reverts first-run.md to a bare `docker`.
 echo "--- Scenario E: docker discovery under DSM-like PATH (no /usr/local/bin) ---"
-FIRST_RUN_MD="$SCRIPT_DIR/../../plugin/commands/first-run.md"
+# FIRST_RUN_MD is already set by Scenario S above.
 PAYLOAD=$(grep -F 'DOCKER_OK=$(discover docker' "$FIRST_RUN_MD" | sed -E 's/^.*discover docker "(.*)"\)$/\1/')
 [ -n "$PAYLOAD" ] || { echo "FAIL E: could not extract docker-discovery payload from first-run.md"; exit 1; }
 

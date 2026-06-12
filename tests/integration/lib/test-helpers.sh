@@ -94,6 +94,9 @@ write_test_profile() {
 - key_path: $HOME/.ssh/synology-manager-plus_ed25519
 - connect_timeout_seconds: 10
 
+## Software
+- hostname: mocknas
+
 ## Last Updated
 2026-05-10T12:00:00Z
 EOF

@@ -79,6 +79,11 @@ TESTS=(
   test-compose-update.sh
   test-daemon-down.sh
   test-daemon-noperm.sh
+  test-nas-list.sh
+  test-nas-use.sh
+  test-nas-remove.sh
+  test-nas-add.sh
+  test-fanout.sh
 )
 
 mkdir -p "$SCRIPT_DIR/logs"
