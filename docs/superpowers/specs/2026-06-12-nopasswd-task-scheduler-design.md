@@ -89,9 +89,10 @@ Eigenständig, jederzeit ausführbar. `allowed-tools: Bash, Read, Write, Edit, A
 ### Test
 
 `tests/unit/test-sudo-lib.sh`:
-- `smp_render_sudoers_script`: User + Pfad korrekt interpoliert; `visudo -cf` vorhanden;
-  Mode `0440`, Owner `root:root`; Drop-in-Name enthält **keinen Punkt**
-  (sudoers ignoriert Dateien mit `.` im Namen).
+- `smp_render_sudoers_script`: User + Pfad korrekt interpoliert; **konditionaler**
+  `visudo`-Branch vorhanden (visudo ist optional, nicht unbedingt); Mode `0440`, Owner
+  `root:root`; finaler Drop-in-Name enthält **keinen Punkt** (sudoers ignoriert Dateien
+  mit `.` im Namen); Temp-Datei wird in `/etc/sudoers.d` mit Punkt-Präfix angelegt.
 - `smp_docker_sudo_probe`: korrekte Klassifizierung gegen gemockte `docker info`-Ausgaben
   (ok / password-required / daemon-down / not-found / unknown).
 - `smp_render_sudoers_script`: Result-Marker-Pfad ist absolut (kein `~`); Skript prüft
@@ -139,20 +140,26 @@ DSM hat ein gemischtes Userland (teils BusyBox, teils GNU). Das root-Skript darf
      root-Task zu roots Home, nicht zum User-Home). Vor Ausführung die hochgeladene Datei
      auf `chmod 0700` setzen (TOCTOU-Fläche minimieren: ein als root ausgeführtes, für
      andere schreibbares Skript ist eine Eskalations-Lücke). Cleanup-Hinweis ausgeben.
-8. **GUI-Schritte** (kopierfertig):
+8. **Stale-Marker löschen** (Proof-of-this-run) — **vor** der GUI-Anleitung, damit der
+   User die Aufgabe noch nicht ausgeführt hat: das Plugin löscht einen evtl. vorhandenen
+   alten Marker per SSH (`rm -f <home_path>/smp-sudo-setup.result`). Der SSH-User besitzt
+   sein Home-Verzeichnis und darf die root-owned `0644`-Datei daher unlinken. Danach ist
+   jeder gefundene Marker garantiert aus diesem Lauf.
+9. **GUI-Schritte** (kopierfertig):
    > Systemsteuerung → Aufgabenplaner → Erstellen → Geplante Aufgabe →
    > Benutzerdefiniertes Skript. Benutzer: **root**. Reiter „Aufgabeneinstellungen" →
    > Skript einfügen. Speichern → Aufgabe markieren → **Ausführen** → bestätigen.
    > Danach kann die Aufgabe gelöscht werden.
-9. **Verifikation**: nach „fertig" zuerst den **Result-Marker** über SSH lesen
+10. **Verifikation**: nach „fertig" zuerst den **Result-Marker** über SSH lesen
    (`<home_path>/smp-sudo-setup.result`), dann Re-Probe mit Retry (3 Versuche, kurzer
    Abstand) via `smp_docker_sudo_probe`:
    - Marker `rc=0` **und** Probe `ok` → Profil `sudo_passwordless: yes` setzen (atomarer
      Edit), `render_claude_md` neu rendern, Erfolg melden.
    - Marker `rc=1` → den echten Fehler aus `stage=`/`msg=` direkt anzeigen
      (z. B. `stage=includedir`, `stage=visudo`) — kein Rätselraten.
-   - Kein Marker vorhanden → die Aufgabe wurde (noch) nicht ausgeführt **oder** nicht als
-     root angelegt. Das ist der häufigste Fall und wird **zuerst** genannt.
+   - Kein Marker vorhanden → da der alte Marker in Step 8 gelöscht wurde, heißt das
+     **definitiv**: die Aufgabe wurde (noch) nicht ausgeführt **oder** nicht als root
+     angelegt. Das ist der häufigste Fall und wird **zuerst** genannt.
    - Marker `rc=0`, aber Probe ≠ `ok` → Diagnose nach realer Häufigkeit:
      1. Aufgabe wirklich als **root** ausgeführt (nicht als anderem User)?
      2. `validated=no` im Marker → visudo fehlte, Syntax ungeprüft — Zeile sichten.
@@ -181,8 +188,9 @@ fail() { echo "rc=1 stage=$1 msg=$2" > "$MARKER"; chmod 0644 "$MARKER" 2>/dev/nu
 grep -Eq '^[@#]includedir[[:space:]]+/etc/sudoers\.d' /etc/sudoers \
   || fail includedir "/etc/sudoers includes keine /etc/sudoers.d"
 
-# 1. Temp-Datei mit sicheren Rechten (umask/chmod statt install-Flags — busybox-tauglich).
-TMP="$(mktemp)" || fail mktemp "mktemp nicht verfuegbar"
+# 1. Temp-Datei IM Zielverzeichnis (Same-FS!) mit Punkt-Praefix — sudoers ignoriert
+#    '.'-Dateien, das transiente File ist also waehrend des Fensters inaktiv.
+TMP="$(mktemp /etc/sudoers.d/.smp-XXXXXX)" || fail mktemp "mktemp nicht verfuegbar"
 printf '%s\n' "$LINE" > "$TMP"
 
 # 2. Validieren VOR Aktivierung, falls visudo existiert; sonst Hinweis im Marker.
@@ -193,9 +201,11 @@ else
   VALIDATED=no
 fi
 
-# 3. Atomar aktivieren mit korrektem Owner/Mode.
+# 3. Atomar aktivieren: chown/chmod auf der inaktiven Temp-Datei, dann Same-FS-rename.
+#    'mv' im selben Verzeichnis ist rename(2) — atomar, kein copy+unlink, kein
+#    Fenster fuer eine halb geschriebene Zeile in sudoers.d (Lockout-Schutz).
 chown root:root "$TMP" && chmod 0440 "$TMP" || { rm -f "$TMP"; fail perms "chown/chmod"; }
-mv -f "$TMP" "$DROPIN" || { rm -f "$TMP"; fail install "mv nach sudoers.d"; }
+mv -f "$TMP" "$DROPIN" || { rm -f "$TMP"; fail install "rename nach sudoers.d"; }
 
 echo "rc=0 stage=done validated=$VALIDATED user=$USER_NAME bin=$DOCKER_BIN" > "$MARKER"
 chmod 0644 "$MARKER" 2>/dev/null
@@ -209,6 +219,10 @@ Sicherheits-Eigenschaften:
   würde sonst das gesamte sudo-System lahmlegen (Lockout-Schutz). Fehlt `visudo`, wird
   `validated=no` im Marker vermerkt.
 - **busybox-tauglich** — `mktemp`/`chown`/`chmod`/`mv` statt `install -o -g -m`.
+- **Atomares Same-FS-rename** — Temp-Datei wird in `/etc/sudoers.d` selbst angelegt
+  (Punkt-Präfix → von sudo ignoriert), sodass das finale `mv` ein echtes `rename(2)` ist.
+  Verhindert, dass ein cross-filesystem copy+unlink eine halbe Zeile in `sudoers.d`
+  hinterlässt (Lockout-Restrisiko des visudo-Schutzes geschlossen).
 - **Drop-in-Name ohne Punkt** — `sudoers.d` ignoriert Dateien mit `.` im Namen. Mode `0440`,
   Owner `root:root` — sudo ignoriert Drop-ins mit falschem Mode/Owner.
 - **Result-Marker** (`rc=…`, `stage=…`, `validated=…`) — vom Plugin lesbar, Mode `0644`,
@@ -290,6 +304,27 @@ laufen. Daher:
    Feld `sudo_passwordless` auf `yes` aktualisiert (atomarer Edit) + `render_claude_md`.
 3. Bricht der User in der GUI-Phase ab, ist das Profil bereits vollständig und korrekt
    (nur Docker-sudo noch offen); `/setup-docker-sudo` setzt später nahtlos fort.
+
+## Im Plan zu klären (offene Implementierungs-Entscheidungen)
+
+Diese Punkte sind bewusst nicht in der Spec festgenagelt, müssen aber im
+Implementierungsplan explizit entschieden und nicht stillschweigend übergangen werden:
+
+- **Zwei Docker-Klassifizierer reconcilen.** `_compose-lib.sh` hat bereits
+  `docker_daemon_precheck` (eigene Inline-Klassifizierung, return 0/1 + Print); neu kommt
+  `smp_docker_sudo_probe` (Status-String). Entscheiden: precheck in Begriffen der neuen
+  Probe neu implementieren (eine Wahrheit, Mirror) **oder** Trennung explizit dokumentieren
+  mit Begründung. Nicht implizit zwei divergierende Klassifizierer stehen lassen.
+- **`set -e`-Sicherheit des Inline-Setup-Flows in first-run.** first-run läuft mit
+  `set -euo pipefail`. grep-basierte Klassifizierung liefert exit 1 bei No-Match und würde
+  den Wizard abbrechen — gerade im erwarteten `password-required`-Pfad. Jeder
+  Klassifizierungs-/grep-Aufruf muss geguardet sein (`|| true` / explizite Exit-Erfassung)
+  bzw. der Setup-Flow in einer Subshell ohne `-e` laufen. `smp_docker_sudo_probe` muss
+  intern set-e-sicher sein.
+- **`home_path`: live ermittelt, nicht persistiert.** Empfehlung: zum Render-Zeitpunkt live
+  via `discover home "echo \$HOME"` (neuer Schritt in first-run) bzw. live-Probe in
+  `/setup-docker-sudo` — **kein** persistiertes Profilfeld. Falls der Plan stattdessen
+  persistieren will, bewusst ins Schema aufnehmen. Eine Variante festlegen.
 
 ## Betroffene Dateien (Zusammenfassung)
 
