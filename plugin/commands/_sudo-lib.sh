@@ -22,3 +22,18 @@ smp_classify_docker_info() {
     echo unknown
   fi
 }
+
+# smp_docker_sudo_probe <ssh-array-name>
+# Runs 'sudo -n /usr/local/bin/docker info' over the named SSH array and echoes
+# one status token (see smp_classify_docker_info). The docker path is the literal
+# /usr/local/bin/docker — the abspath regression guard forbids a path variable,
+# and the entire codebase hardcodes this path; a non-standard path surfaces as
+# 'not-found'. set -e safe: never returns non-zero, never aborts the caller.
+smp_docker_sudo_probe() {
+  local ssh_var="$1"
+  # shellcheck disable=SC2178
+  local -n ssh_ref="$ssh_var"
+  local out
+  out=$("${ssh_ref[@]}" "sudo -n /usr/local/bin/docker info --format '{{.ServerVersion}}' 2>&1" || true)
+  smp_classify_docker_info "$out"
+}
