@@ -79,7 +79,8 @@ case "$DOCKER_INFO" in
   [0-9]*\.[0-9]*) echo "Passwordless docker-sudo is already active."; exit 0 ;;
   *"command not found"*|*"No such file"*) echo "docker not found at /usr/local/bin/docker. Run 'which docker' on the NAS and adjust the path."; exit 1 ;;
 esac
-HOME_PATH=$("${SSH[@]}" "echo \$HOME")
+HOME_PATH=$("${SSH[@]}" "echo \$HOME" || true)
+[ -n "$HOME_PATH" ] || { echo "Could not determine the SSH user's home directory on the NAS — aborting." >&2; exit 1; }
 IS_ADMIN=$("${SSH[@]}" "id -Gn 2>/dev/null | grep -qw administrators && echo admin || echo standard" || echo standard)
 ```
 
