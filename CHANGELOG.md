@@ -3,6 +3,18 @@
 All notable changes to synology-manager-plus are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] — 2026-06-12
+
+### Added
+
+- `/setup-docker-sudo` — guided passwordless docker-sudo setup via the DSM Task Scheduler, with a `visudo`-validated, atomic, busybox-safe root script and self-verification through a result marker.
+- `_sudo-lib.sh` (unit-tested) with `smp_classify_docker_info`, `smp_docker_sudo_probe`, `smp_render_sudoers_script`, `smp_user_is_admin_probe`.
+- `/first-run` now sets up docker-sudo after the atomic profile write (resumable) and records `sudo_checked_at`.
+
+### Fixed
+
+- `sudo_passwordless` probe tested global sudo (`sudo -n true`), which fails under a docker-scoped `NOPASSWD` drop-in. It now probes `/usr/local/bin/docker` specifically and is `n/a` when Docker is absent.
+
 ## [0.7.0] — 2026-05-30
 
 ### Added

@@ -42,6 +42,7 @@ claude plugin install synology-manager-plus@synology-manager-plus
 |---|---|
 |`/first-run`|Interactive setup wizard (one-time, idempotent)|
 |`/setup-ssh`|Standalone SSH key setup|
+|`/setup-docker-sudo`|Guided passwordless docker-sudo setup via DSM Task Scheduler|
 |`/diag`|7-point health check (read-only)|
 |`/nas-status`|Disk usage, RAID, services, load (`--all` for fleet view)|
 |`/list-shares`|List shared folders, refresh volume snapshots|
@@ -132,6 +133,13 @@ sudo chmod 0440 /etc/sudoers.d/synology-manager-plus-docker
 For DSM users already in `administrators` (which is `(ALL) ALL`),
 the NOPASSWD override only adds **passwordless** access for docker —
 it does not expand what the user could already do.
+
+**Docker commands say "a password is required".**
+
+Passwordless sudo for `/usr/local/bin/docker` is missing (DSM updates wipe the
+`sudoers.d` drop-in). Run `/setup-docker-sudo` — it generates a root script, walks
+you through the DSM Task Scheduler (the only reliable way to run a one-off root
+script on DSM), and verifies the result.
 
 **`/compose-update` aborts with ".env unreadable".**
 On DSM, Compose projects created via Container-Manager UI sometimes
