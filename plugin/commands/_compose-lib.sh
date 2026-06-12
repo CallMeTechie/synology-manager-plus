@@ -35,10 +35,7 @@ docker_daemon_precheck() {
   fi
   if echo "$out" | grep -qi "a password is required"; then
     echo "ERROR: passwordless sudo for /usr/local/bin/docker is not configured on the NAS." >&2
-    echo "  Fix:" >&2
-    echo "    echo '<user> ALL=(ALL) NOPASSWD: /usr/local/bin/docker' | \\" >&2
-    echo "      sudo tee /etc/sudoers.d/synology-manager-plus-docker" >&2
-    echo "    sudo chmod 0440 /etc/sudoers.d/synology-manager-plus-docker" >&2
+    echo "  Fix: run /setup-docker-sudo (guided Task Scheduler setup + verification)." >&2
     return 1
   fi
   if echo "$out" | grep -qi "Cannot connect to the Docker daemon"; then
