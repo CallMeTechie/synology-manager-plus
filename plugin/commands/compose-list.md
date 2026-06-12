@@ -76,10 +76,7 @@ DOCKER_INFO=$("${SSH[@]}" "sudo -n /usr/local/bin/docker info --format '{{.Serve
 if ! echo "$DOCKER_INFO" | grep -q '^[0-9][0-9]*\.[0-9]'; then
   if echo "$DOCKER_INFO" | grep -qi "a password is required"; then
     echo "ERROR: passwordless sudo for /usr/local/bin/docker is not configured on the NAS." >&2
-    echo "  Fix on the NAS:" >&2
-    echo "    echo '$NAS_USER ALL=(ALL) NOPASSWD: /usr/local/bin/docker' \\" >&2
-    echo "      | sudo tee /etc/sudoers.d/synology-manager-plus-docker" >&2
-    echo "    sudo chmod 0440 /etc/sudoers.d/synology-manager-plus-docker" >&2
+    echo "  Fix: run /setup-docker-sudo (guided Task Scheduler setup + verification)." >&2
   elif echo "$DOCKER_INFO" | grep -qi "Cannot connect to the Docker daemon"; then
     echo "ERROR: Docker daemon is not running on the NAS." >&2
     echo "  Check status: sudo synoservice --status pkgctl-ContainerManager" >&2
