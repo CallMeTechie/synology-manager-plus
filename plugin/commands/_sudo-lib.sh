@@ -85,3 +85,11 @@ chmod 0644 "\$MARKER" 2>/dev/null
 echo "OK: NOPASSWD for \$USER_NAME -> \$DOCKER_BIN active."
 EOF
 }
+
+# smp_user_is_admin_probe
+# Echoes the remote shell snippet (to run over SSH) that prints 'admin' if the
+# SSH user is in the DSM administrators group, else 'standard'. Used to tailor
+# the setup messaging (Task Scheduler mandatory vs. recommended).
+smp_user_is_admin_probe() {
+  printf '%s' "id -Gn 2>/dev/null | grep -qw administrators && echo admin || echo standard"
+}

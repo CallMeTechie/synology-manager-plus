@@ -55,6 +55,10 @@ check_eq "render: includedir allows quote" "$(contains 'includedir[[:space:]]+"?
 check_eq "render: username sanitize"       "$(contains 'username unsafe for sudoers' "$SCRIPT")" "yes"
 check_eq "render: success marker rc=0"     "$(contains 'rc=0 stage=done' "$SCRIPT")" "yes"
 
+# --- smp_user_is_admin_probe ---
+check_eq "admin probe snippet" "$(smp_user_is_admin_probe)" \
+  "id -Gn 2>/dev/null | grep -qw administrators && echo admin || echo standard"
+
 echo ""
 echo "=== test-sudo-lib: $pass_count pass, $fail_count fail ==="
 [ "$fail_count" -eq 0 ]
