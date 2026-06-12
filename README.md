@@ -228,8 +228,6 @@ sudo -n /usr/local/bin/docker image prune     # removes dangling images
 - SID-based auth with 2FA awareness
 - Hyper Backup status/trigger, snapshot replication, app permissions
 
-Design notes for each area live under `docs/superpowers/specs/`.
-
 ## License
 
 MIT — see [LICENSE](LICENSE). Original work copyright © 2026 Daniel Rosehill. Modifications and fork copyright © 2026 Marc Backes.

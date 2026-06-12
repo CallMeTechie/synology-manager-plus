@@ -12,3 +12,6 @@ Thumbs.db
 tests/integration/logs/
 tests/integration/.tmp-home-*
 *.log
+
+# Internal design docs (superpowers specs/plans/verify-data) — never publish
+docs/
