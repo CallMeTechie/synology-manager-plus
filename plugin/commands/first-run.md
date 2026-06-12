@@ -142,7 +142,12 @@ VOL1_LIST=$(discover vol1 "ls /volume1/")
 # absolute path — not `command -v docker` — is the only reliable detection;
 # all /compose-* commands use the same absolute path.
 DOCKER_OK=$(discover docker "[ -x /usr/local/bin/docker ] && /usr/local/bin/docker --version || echo 'not installed'")
-SUDO_OK=$(discover sudo "sudo -n true 2>/dev/null && echo yes || echo no")
+HOME_PATH=$(discover home "echo \$HOME")
+if [ "$DOCKER_OK" = "not installed" ]; then
+  SUDO_OK="n/a"
+else
+  SUDO_OK=$(discover sudo "sudo -n /usr/local/bin/docker info >/dev/null 2>&1 && echo yes || echo no")
+fi
 ```
 
 Validate the must-have fields explicitly — `discover()` already aborts on
@@ -212,6 +217,7 @@ _Populated by /first-run on <ISO 8601 UTC>._
 - hostname: <HOSTNAME_VAL>
 - docker_available: <DOCKER_OK>
 - sudo_passwordless: <SUDO_OK>
+- sudo_checked_at: <ISO 8601 UTC>
 
 ## Volumes
 <DF_OUTPUT in fenced block>
