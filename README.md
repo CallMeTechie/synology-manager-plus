@@ -1,10 +1,10 @@
 # synology-manager-plus
 
-A Claude Code plugin for managing a Synology NAS via SSH. Ten commands for setup, diagnostics, storage, SMART health, logs, and DSM update monitoring — all SSH-based, no DSM Web API required.
+A Claude Code plugin for managing one or more Synology NAS via SSH. Commands for setup, diagnostics, storage, SMART health, logs, DSM update monitoring, Docker/Compose, and multi-NAS management — all SSH-based, no DSM Web API required.
 
 **This is a fork** of [`danielrosehill/synology-manager-plugin`](https://github.com/danielrosehill/synology-manager-plugin). The fork addresses three blockers in the upstream v0.1.0 and grows the command set over successive releases. Original credit to Daniel Rosehill.
 
-**Latest version:** v0.4.1. Verified against DSM 7.3.1-86003 on a DS218+.
+**Latest version:** v0.8.0. Baseline verified against DSM 7.3.1-86003 on a DS218+.
 
 ## What's different from the original
 
@@ -20,8 +20,8 @@ A Claude Code plugin for managing a Synology NAS via SSH. Ten commands for setup
 |SSH key|Used `~/.ssh/id_ed25519`, conflicted with user keys|Plugin-owned `~/.ssh/synology-manager-plus_ed25519`|
 |Connect timeout|Hard-coded 5s, broke on WAN/VPN|Default 10s, configurable per-profile|
 |User notes in CLAUDE.md|Could be overwritten by `/first-run` re-run|Protected via managed-section markers|
-|Tests|None|Static checks + 18 Mock-NAS smoke tests + 1 unit test in CI|
-|Docker management|Absent|6 /compose-* and /docker-list commands (SSH + sudoers Drop-in for /usr/local/bin/docker)|
+|Tests|None|Static checks + Mock-NAS smoke suite + unit tests (profile-lib, sudo-lib, compose) in CI|
+|Docker management|Absent|6 /compose-* and /docker-list commands; `/setup-docker-sudo` installs the passwordless sudoers drop-in via the DSM Task Scheduler|
 
 ## Installation
 
@@ -120,8 +120,11 @@ The DSM default user is not in the `docker` group. The plugin shows the same two
 Synology can change `synoupgrade --check` status-code constants without notice. The plugin fails loud with the raw status code and the first 200 chars of output instead of silently mapping to "up-to-date" — that would risk missed security updates. Open DSM Web UI → Control Panel → Update & Restore to verify manually, and (if you have time) open an issue with the unknown code so I can extend the mapping.
 
 **`/compose-list` says "passwordless sudo for /usr/local/bin/docker is not configured".**
-DSM has no `docker` group pre-created, so the plugin uses a sudoers
-drop-in as for smartctl and synoupgrade. Install once:
+Run `/setup-docker-sudo` — it generates a root script and walks you through the DSM
+Task Scheduler (the only reliable way to run a one-off root script on DSM) to install
+the `NOPASSWD: /usr/local/bin/docker` drop-in, then verifies it.
+
+Advanced/manual alternative (admin users who prefer to do it over SSH):
 
 ```bash
 ssh your-nas
@@ -200,8 +203,12 @@ sudo -n /usr/local/bin/docker image prune     # removes dangling images
 
 ### Shipped
 
-Docker and Compose operations landed in v0.4.0: `/compose-list`, `/compose-up`,
-`/compose-down`, `/compose-update`, `/compose-logs`, `/docker-list`.
+- Docker and Compose operations (v0.4.0): `/compose-list`, `/compose-up`, `/compose-down`,
+  `/compose-update`, `/compose-logs`, `/docker-list`.
+- Multi-NAS management (v0.7.0): per-NAS profiles under `context/nas/<slug>/`, `/nas-list`,
+  `/nas-use`, `/nas-add`, `/nas-remove`, and `--all` fleet fan-out on the overview commands.
+- Passwordless docker-sudo setup (v0.8.0): `/setup-docker-sudo` installs the
+  `NOPASSWD: /usr/local/bin/docker` drop-in via the DSM Task Scheduler, with verification.
 
 ### Planned
 
