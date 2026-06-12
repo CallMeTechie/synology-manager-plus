@@ -232,6 +232,8 @@ check_eq "render: temp in sudoers.d"       "$(contains 'mktemp /etc/sudoers.d/.s
 check_eq "render: conditional visudo"      "$(contains 'command -v visudo' "$SCRIPT")" "yes"
 check_eq "render: mode 0440"               "$(contains 'chmod 0440' "$SCRIPT")" "yes"
 check_eq "render: includedir check"        "$(contains 'includedir' "$SCRIPT")" "yes"
+check_eq "render: includedir allows quote" "$(contains 'includedir[[:space:]]+"?/etc/sudoers' "$SCRIPT")" "yes"
+check_eq "render: username sanitize"       "$(contains 'username unsafe for sudoers' "$SCRIPT")" "yes"
 check_eq "render: success marker rc=0"     "$(contains 'rc=0 stage=done' "$SCRIPT")" "yes"
 ```
 
@@ -265,7 +267,13 @@ LINE="\$USER_NAME ALL=(ALL) NOPASSWD: \$DOCKER_BIN"
 
 fail() { echo "rc=1 stage=\$1 msg=\$2" > "\$MARKER"; chmod 0644 "\$MARKER" 2>/dev/null; exit 1; }
 
-grep -Eq '^[@#]includedir[[:space:]]+/etc/sudoers\.d' /etc/sudoers \\
+# Defense-in-depth for the no-visudo case: reject a username that would produce a
+# syntactically invalid sudoers line (an invalid drop-in can break sudo system-wide).
+printf '%s' "\$USER_NAME" | grep -qE '^[A-Za-z0-9_.@-]+\$' \\
+  || fail validate "username unsafe for sudoers"
+
+# Accept both modern @includedir and legacy #includedir, quoted or unquoted path.
+grep -Eq '^[@#]includedir[[:space:]]+"?/etc/sudoers\.d' /etc/sudoers \\
   || fail includedir "/etc/sudoers includes no /etc/sudoers.d"
 
 TMP="\$(mktemp /etc/sudoers.d/.smp-XXXXXX)" || fail mktemp "mktemp unavailable"
@@ -291,7 +299,7 @@ EOF
 - [ ] **Step 4: Test laufen lassen — muss bestehen**
 
 Run: `bash tests/unit/test-sudo-lib.sh`
-Expected: PASS — `17 pass, 0 fail`.
+Expected: PASS — `19 pass, 0 fail`.
 
 - [ ] **Step 5: Erzeugtes Skript ist syntaktisch gültiges sh**
 
@@ -350,7 +358,7 @@ smp_user_is_admin_probe() {
 - [ ] **Step 4: Test laufen lassen — muss bestehen**
 
 Run: `bash tests/unit/test-sudo-lib.sh`
-Expected: PASS — `18 pass, 0 fail`.
+Expected: PASS — `20 pass, 0 fail`.
 
 - [ ] **Step 5: shellcheck**
 
@@ -448,8 +456,8 @@ correct profile — `/setup-docker-sudo` can finish it later.
 if [ "$DOCKER_OK" != "not installed" ]; then
   PROBE=$("${SSH[@]}" "sudo -n /usr/local/bin/docker info --format '{{.ServerVersion}}' 2>&1" || true)
   case "$PROBE" in
-    [0-9]*.[0-9]*) NEED_SETUP=no ;;   # already ok
-    *)             NEED_SETUP=yes ;;
+    [0-9]*\.[0-9]*) NEED_SETUP=no ;;   # already ok (literal dot)
+    *)              NEED_SETUP=yes ;;
   esac
 else
   NEED_SETUP=no
@@ -477,7 +485,8 @@ DROPIN="/etc/sudoers.d/synology-manager-plus-docker"
 MARKER="$HOME_PATH/smp-sudo-setup.result"
 LINE="\$USER_NAME ALL=(ALL) NOPASSWD: \$DOCKER_BIN"
 fail() { echo "rc=1 stage=\$1 msg=\$2" > "\$MARKER"; chmod 0644 "\$MARKER" 2>/dev/null; exit 1; }
-grep -Eq '^[@#]includedir[[:space:]]+/etc/sudoers\.d' /etc/sudoers \\
+printf '%s' "\$USER_NAME" | grep -qE '^[A-Za-z0-9_.@-]+\$' || fail validate "username unsafe for sudoers"
+grep -Eq '^[@#]includedir[[:space:]]+"?/etc/sudoers\.d' /etc/sudoers \\
   || fail includedir "/etc/sudoers includes no /etc/sudoers.d"
 TMP="\$(mktemp /etc/sudoers.d/.smp-XXXXXX)" || fail mktemp "mktemp unavailable"
 printf '%s\n' "\$LINE" > "\$TMP"
@@ -496,12 +505,26 @@ EOF
 )
 ```
 
-2. Use `AskUserQuestion` to let the user choose the delivery mechanism:
-   - "Paste full script" — print `$SUDO_SCRIPT` and ask them to paste it into the
-     Task Scheduler script box.
-   - "Upload + one-liner" — upload the script to the user home over SSH and have
-     the task run it by ABSOLUTE path (never `~`, which is root's home under the
-     task). Set the uploaded file to `0700` first:
+2. Use `AskUserQuestion` to let the user choose the delivery mechanism. Present
+   **"Paste full script" as the recommended/safer default** — it has no
+   upload-then-execute window and the user sees exactly what runs as root.
+   - "Paste full script (recommended)" — print `$SUDO_SCRIPT`, ask them to paste
+     it into the Task Scheduler script box, AND write a reference copy to the
+     workspace (spec requires both):
+
+```bash
+mkdir -p "context/nas/$nas_slug"
+printf '%s\n' "$SUDO_SCRIPT" > "context/nas/$nas_slug/setup-docker-sudo.sh"
+```
+
+   - "Upload + one-liner (trusted environments only)" — upload the script to the
+     user home over SSH and run it by ABSOLUTE path (never `~`, which is root's
+     home under the task). **Security caveat to state to the user:** the uploaded
+     file is owned and writable by the SSH user but executed as root, so a process
+     running as that user could swap its contents in the window before the task
+     runs (local privilege escalation). Prefer the paste option unless the NAS is
+     single-user/trusted. `chmod 0700` limits exposure but does not close it
+     (the owner can re-add write):
 
 ```bash
 printf '%s\n' "$SUDO_SCRIPT" | "${SSH[@]}" "cat > '$HOME_PATH/smp-setup-docker-sudo.sh' && chmod 0700 '$HOME_PATH/smp-setup-docker-sudo.sh'"
@@ -527,7 +550,7 @@ MARKER_OUT=$("${SSH[@]}" "cat '$HOME_PATH/smp-sudo-setup.result' 2>/dev/null" ||
 OK=no
 for i in 1 2 3; do
   P=$("${SSH[@]}" "sudo -n /usr/local/bin/docker info --format '{{.ServerVersion}}' 2>&1" || true)
-  case "$P" in [0-9]*.[0-9]*) OK=yes; break ;; esac
+  case "$P" in [0-9]*\.[0-9]*) OK=yes; break ;; esac
   sleep 2
 done
 ```
@@ -589,10 +612,12 @@ full `/first-run`.
 
 ### 1. Resolve the active NAS
 
-<!-- INLINE MIRROR of the standard profile-resolver block (see docker-list.md:14-70).
-     Copy it verbatim: read context/active-nas -> load context/nas/<slug>/profile.md
-     -> validate -> build the SSH=( ssh -i "$KEY_PATH" -o ConnectTimeout=... -p "$PORT"
-     "$NAS_USER@$HOST" ) array. -->
+Copy the standard profile-resolver block **verbatim** from any existing command
+that has it (e.g. the block under `## SSH + ...` near the top of `docker-list.md`
+or `compose-list.md` — identified by the comment `# Mirrors plugin/commands/_profile-lib.sh`).
+It reads `context/active-nas` → loads `context/nas/<slug>/profile.md` → validates →
+builds `SSH=( ssh -i "$KEY_PATH" -o ConnectTimeout="$CONNECT_TIMEOUT" -p "$PORT" "$NAS_USER@$HOST" )`.
+Paste the real code here — do not leave a comment placeholder.
 
 ### 2. Probe current state
 
@@ -618,23 +643,39 @@ first-run Step 8.1, with `USER_NAME="$NAS_USER"` and `MARKER="$HOME_PATH/smp-sud
 
 ### 4. Choose delivery (AskUserQuestion), delete stale marker, print GUI steps
 
-Identical to first-run Step 8.2–8.4: paste-full-script vs upload+absolute-path
-one-liner (`chmod 0700` the upload); then `rm -f` the stale marker BEFORE the user
-runs the task; then print the Task Scheduler GUI steps (User: **root**).
+Use the SAME blocks as first-run Task 6 Step 2/3/4 (copy them verbatim, with
+`USER_NAME="$NAS_USER"`). **Note the slug variable differs:** here the active slug
+is `$SLUG` (set by the resolver block, `SLUG="$ACTIVE"`), not first-run's `$nas_slug`.
+- `AskUserQuestion` delivery choice — present **"Paste full script (recommended)"**
+  as the safer default, and write the reference copy
+  `printf '%s\n' "$SUDO_SCRIPT" > "context/nas/$SLUG/setup-docker-sudo.sh"`.
+- The **"Upload + one-liner (trusted environments only)"** branch with the absolute
+  path (never `~`), `chmod 0700`, and the local-privilege-escalation caveat stated
+  to the user.
+- Delete the stale marker BEFORE the GUI steps:
+  `"${SSH[@]}" "rm -f '$HOME_PATH/smp-sudo-setup.result'" || true`.
+- Print the Task Scheduler GUI steps (User: **root**).
 
 ### 5. Verify
 
-Identical to first-run Step 8.5: read the marker, re-probe with 3 retries. On
-success, update the active profile's `sudo_passwordless: yes` + `sudo_checked_at`
-(atomic edit) and re-render CLAUDE.md. On failure, diagnose by frequency
-(not-run/not-root first, then marker `stage`/`msg`, then user/includedir/path).
+Use the SAME block as first-run Task 6 Step 5 (copy verbatim): read the marker,
+re-probe with 3 retries. On success, update the active profile's
+`sudo_passwordless: yes` + `sudo_checked_at` (atomic edit) and re-render CLAUDE.md.
+On failure, diagnose by frequency (not-run/not-root first, then marker
+`stage`/`msg`, then user/includedir/path).
 ````
 
-> Beim Umsetzen: die `<!-- INLINE MIRROR … -->`-Hinweise durch den **tatsächlichen**
-> Code ersetzen (verbatim aus den Referenzstellen), keine Kommentar-Platzhalter im
-> finalen File belassen.
+> Beim Umsetzen: ALLE Referenz-Hinweise (`Copy … verbatim`, `SAME block as …`)
+> durch den **tatsächlichen** Code ersetzen. Keine Kommentar-Platzhalter und keine
+> „SAME block"-Verweise im finalen File belassen — Step 2 erzwingt das.
 
-- [ ] **Step 2: Statische Checks**
+- [ ] **Step 2: Anti-Stub-Verifikation + statische Checks**
+
+Zuerst sicherstellen, dass keine Plan-Referenzmarker im ausgelieferten File
+zurückgeblieben sind (kein Static-Check fängt das sonst):
+
+Run: `! grep -nE 'INLINE MIRROR|SAME block as|Copy .* verbatim|do not leave a comment placeholder|<!--' plugin/commands/setup-docker-sudo.md`
+Expected: exit 0 (kein Treffer). Bei Treffer: den Platzhalter durch echten Code ersetzen.
 
 Run: `bash tests/static/frontmatter-check.sh`
 Expected: enthält `PASS: setup-docker-sudo.md`.
@@ -651,10 +692,10 @@ git commit -m "feat: add /setup-docker-sudo command"
 
 ---
 
-## Task 8: `nas-add.md` — Probe-Fix
+## Task 8: `nas-add.md` — Probe-Fix, Schema-Feld, Setup-Angebot
 
 **Files:**
-- Modify: `plugin/commands/nas-add.md:93`
+- Modify: `plugin/commands/nas-add.md:93` (Probe), `:130-131` (Schema), Profil-Write-Ende (Angebot)
 
 - [ ] **Step 1: Sudo-Probe ersetzen**
 
@@ -674,16 +715,49 @@ else
 fi
 ```
 
-- [ ] **Step 2: Statische Checks**
+- [ ] **Step 2: Profil-Schema um `sudo_checked_at` erweitern**
+
+Im `## Software`-Block des Profil-Templates (Z. ~130-131) die Sudo-Zeile ergänzen,
+damit `nas-add`-Profile dasselbe Schema wie `first-run`-Profile haben. Alt:
+
+```markdown
+- docker_available: $DOCKER_OK
+- sudo_passwordless: $SUDO_OK
+```
+
+Neu:
+
+```markdown
+- docker_available: $DOCKER_OK
+- sudo_passwordless: $SUDO_OK
+- sudo_checked_at: <ISO 8601 UTC>
+```
+
+- [ ] **Step 3: Setup-Angebot nach dem Profil-Write**
+
+Nach dem atomaren Profil-Write der neuen NAS (am Ende des Erfolgs-Pfads, vor der
+Abschlussmeldung) einen Hinweis ausgeben, wenn Docker da ist aber sudo fehlt. Wir
+fahren den Flow hier NICHT inline (DRY — er lebt in `/setup-docker-sudo`), sondern
+bieten ihn an:
+
+```bash
+if [ "$DOCKER_OK" != "not installed" ] && [ "$SUDO_OK" != "yes" ]; then
+  echo "Docker is installed on '$SLUG' but passwordless docker-sudo is not set up."
+  echo "Run /setup-docker-sudo to configure it (it operates on the active NAS —"
+  echo "switch first with: /nas-use $SLUG)."
+fi
+```
+
+- [ ] **Step 4: Statische Checks**
 
 Run: `bash tests/static/docker-abspath-check.sh && bash tests/static/shellcheck-commands.sh && bash tests/static/markdown-lint.sh`
 Expected: alle PASS / exit 0.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add plugin/commands/nas-add.md
-git commit -m "fix: nas-add probes docker-specific passwordless sudo"
+git commit -m "feat: nas-add fixes sudo probe and offers docker-sudo setup"
 ```
 
 ---
