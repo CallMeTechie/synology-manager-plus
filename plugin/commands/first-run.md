@@ -350,7 +350,131 @@ EOF
 render_claude_md "$nas_slug"
 ```
 
-### 8. Summary
+### 8. Set up passwordless docker-sudo (only if needed)
+
+Gate: only run this if Docker is installed AND passwordless sudo is not yet active.
+Skip entirely otherwise. The profile is already written (Step 7) with
+`sudo_passwordless: no`, so abandoning this step mid-way leaves a complete,
+correct profile — `/setup-docker-sudo` can finish it later.
+
+```bash
+# Re-probe live (set -e safe). $SSH is the discovery SSH array from Step 5.
+if [ "$DOCKER_OK" != "not installed" ]; then
+  PROBE=$("${SSH[@]}" "sudo -n /usr/local/bin/docker info --format '{{.ServerVersion}}' 2>&1" || true)
+  case "$PROBE" in
+    [0-9]*\.[0-9]*) NEED_SETUP=no ;;   # already ok (literal dot)
+    *)              NEED_SETUP=yes ;;
+  esac
+else
+  NEED_SETUP=no
+fi
+```
+
+If `NEED_SETUP=no` → skip to Step 9.
+
+If `NEED_SETUP=yes`, run the shared setup flow. **This is an inline mirror of
+`_sudo-lib.sh` — keep it identical to the canonical functions.** Tell the user
+plainly: passwordless sudo for `/usr/local/bin/docker` is effectively root on the
+NAS; we set it via the Task Scheduler (you run it, not me).
+
+**1. Detect the user model and render the script:**
+
+```bash
+IS_ADMIN=$("${SSH[@]}" "id -Gn 2>/dev/null | grep -qw administrators && echo admin || echo standard" || echo standard)
+DROPIN_USER="$NAS_USER"
+SUDO_SCRIPT=$(cat <<EOF
+#!/bin/sh
+# synology-manager-plus: NOPASSWD only for the docker binary (effective root).
+USER_NAME="$DROPIN_USER"
+DOCKER_BIN="/usr/local/bin/docker"
+DROPIN="/etc/sudoers.d/synology-manager-plus-docker"
+MARKER="$HOME_PATH/smp-sudo-setup.result"
+LINE="\$USER_NAME ALL=(ALL) NOPASSWD: \$DOCKER_BIN"
+fail() { echo "rc=1 stage=\$1 msg=\$2" > "\$MARKER"; chmod 0644 "\$MARKER" 2>/dev/null; exit 1; }
+printf '%s' "\$USER_NAME" | grep -qE '^[A-Za-z0-9_.@-]+\$' || fail validate "username unsafe for sudoers"
+grep -Eq '^[@#]includedir[[:space:]]+"?/etc/sudoers\.d' /etc/sudoers \\
+  || fail includedir "/etc/sudoers includes no /etc/sudoers.d"
+TMP="\$(mktemp /etc/sudoers.d/.smp-XXXXXX)" || fail mktemp "mktemp unavailable"
+printf '%s\n' "\$LINE" > "\$TMP"
+if command -v visudo >/dev/null 2>&1; then
+  visudo -cf "\$TMP" || { rm -f "\$TMP"; fail visudo "syntax check failed"; }
+  VALIDATED=yes
+else
+  VALIDATED=no
+fi
+chown root:root "\$TMP" && chmod 0440 "\$TMP" || { rm -f "\$TMP"; fail perms "chown/chmod failed"; }
+mv -f "\$TMP" "\$DROPIN" || { rm -f "\$TMP"; fail install "rename to sudoers.d failed"; }
+echo "rc=0 stage=done validated=\$VALIDATED user=\$USER_NAME bin=\$DOCKER_BIN" > "\$MARKER"
+chmod 0644 "\$MARKER" 2>/dev/null
+echo "OK: NOPASSWD for \$USER_NAME -> \$DOCKER_BIN active."
+EOF
+)
+```
+
+**2. Use `AskUserQuestion` to choose the delivery mechanism:**
+
+Present **"Paste full script" as the recommended/safer default** — it has no
+upload-then-execute window and the user sees exactly what runs as root.
+
+- "Paste full script (recommended)" — print `$SUDO_SCRIPT`, ask them to paste
+  it into the Task Scheduler script box, AND write a reference copy to the
+  workspace (spec requires both):
+
+```bash
+mkdir -p "context/nas/$nas_slug"
+printf '%s\n' "$SUDO_SCRIPT" > "context/nas/$nas_slug/setup-docker-sudo.sh"
+```
+
+- "Upload + one-liner (trusted environments only)" — upload the script to the
+  user home over SSH and run it by ABSOLUTE path (never `~`, which is root's
+  home under the task). **Security caveat to state to the user:** the uploaded
+  file is owned and writable by the SSH user but executed as root, so a process
+  running as that user could swap its contents in the window before the task
+  runs (local privilege escalation). Prefer the paste option unless the NAS is
+  single-user/trusted. `chmod 0700` limits exposure but does not close it
+  (the owner can re-add write):
+
+```bash
+printf '%s\n' "$SUDO_SCRIPT" | "${SSH[@]}" "cat > '$HOME_PATH/smp-setup-docker-sudo.sh' && chmod 0700 '$HOME_PATH/smp-setup-docker-sudo.sh'"
+echo "Task Scheduler 'Run command':  bash $HOME_PATH/smp-setup-docker-sudo.sh"
+```
+
+**3. Delete any stale result marker before the user runs the task:**
+
+proof-of-this-run; the user owns their home dir and may unlink the root-owned 0644 file:
+
+```bash
+"${SSH[@]}" "rm -f '$HOME_PATH/smp-sudo-setup.result'" || true
+```
+
+**4. Print the GUI steps, then wait (AskUserQuestion "Done — verify now?"):**
+
+> Control Panel → Task Scheduler → Create → Scheduled Task → User-defined script.
+> User: **root**. Task Settings → paste the script (or the one-liner). Save →
+> select the task → **Run** → confirm. You may delete the task afterwards.
+
+**5. Verify — read the marker, then re-probe with retries:**
+
+```bash
+MARKER_OUT=$("${SSH[@]}" "cat '$HOME_PATH/smp-sudo-setup.result' 2>/dev/null" || true)
+OK=no
+for i in 1 2 3; do
+  P=$("${SSH[@]}" "sudo -n /usr/local/bin/docker info --format '{{.ServerVersion}}' 2>&1" || true)
+  case "$P" in [0-9]*\.[0-9]*) OK=yes; break ;; esac
+  sleep 2
+done
+```
+
+- `OK=yes` → update the profile field `sudo_passwordless` to `yes` and refresh
+  `sudo_checked_at` (atomic edit), then re-run `render_claude_md "$nas_slug"`.
+- `OK=no` and `$MARKER_OUT` contains `rc=1` → show the real error from
+  `stage=`/`msg=` directly.
+- `OK=no` and no marker → "the task was not run, or not as root" (most common;
+  state first).
+- `OK=no` and marker `rc=0` → diagnose by frequency: ran as root? `validated=no`?
+  dropin user == `$NAS_USER`? includedir active? path/daemon.
+
+### 9. Summary
 
 Print:
 
