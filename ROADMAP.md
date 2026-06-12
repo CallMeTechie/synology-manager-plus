@@ -25,8 +25,8 @@ that were deferred, plus the smaller follow-ups that surfaced while building mul
   mirrored in a unit-tested `_*.sh` (Claude Code commands cannot source bundled libs at
   runtime). See `_profile-lib.sh` / `_compose-lib.sh`.
 - **Per-NAS aware.** Anything that stores state lives under `context/nas/<slug>/`.
-- **Process.** Each feature: spec (`docs/superpowers/specs/`) → plan
-  (`docs/superpowers/plans/`) → multi-round review → subagent-driven implementation → CI green.
+- **Process.** Each feature: design spec → implementation plan → multi-round review →
+  implementation → CI green.
 
 ## 1. Synology-AI-Ops — recommended next
 
