@@ -674,8 +674,11 @@ On failure, diagnose by frequency (not-run/not-root first, then marker
 Zuerst sicherstellen, dass keine Plan-Referenzmarker im ausgelieferten File
 zurückgeblieben sind (kein Static-Check fängt das sonst):
 
-Run: `! grep -nE 'INLINE MIRROR|SAME block as|Copy .* verbatim|do not leave a comment placeholder|<!--' plugin/commands/setup-docker-sudo.md`
+Run: `! grep -nE 'INLINE MIRROR|SAME block as|Copy .* verbatim|do not leave a comment placeholder' plugin/commands/setup-docker-sudo.md`
 Expected: exit 0 (kein Treffer). Bei Treffer: den Platzhalter durch echten Code ersetzen.
+(Hinweis: KEIN bare `<!--` im Pattern — die mitkopierte `render_claude_md`-Funktion
+enthält die Marker-Strings `<!-- synology-manager-plus:managed-start -->` legitim als
+Bash-Strings, genau wie in `nas-add.md`. Die spezifischen Stub-Marker oben reichen.)
 
 Run: `bash tests/static/frontmatter-check.sh`
 Expected: enthält `PASS: setup-docker-sudo.md`.
