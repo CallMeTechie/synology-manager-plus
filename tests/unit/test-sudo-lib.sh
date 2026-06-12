@@ -39,6 +39,22 @@ SSH_PW=( stub_pwd ); check_eq "probe pwd" "$(smp_docker_sudo_probe SSH_PW)"  "pa
 stub_fail() { echo "boom"; return 1; }
 SSH_FAIL=( stub_fail ); check_eq "probe unknown on fail" "$(smp_docker_sudo_probe SSH_FAIL)" "unknown"
 
+# --- smp_render_sudoers_script ---
+SCRIPT="$(smp_render_sudoers_script 'svc' '/usr/local/bin/docker' '/var/services/homes/svc')"
+contains() { case "$2" in *"$1"*) echo yes ;; *) echo no ;; esac; }
+check_eq "render: username interpolated"   "$(contains 'USER_NAME="svc"' "$SCRIPT")" "yes"
+check_eq "render: docker path interpolated" "$(contains 'DOCKER_BIN="/usr/local/bin/docker"' "$SCRIPT")" "yes"
+check_eq "render: marker absolute path"    "$(contains 'MARKER="/var/services/homes/svc/smp-sudo-setup.result"' "$SCRIPT")" "yes"
+check_eq "render: no tilde in marker"      "$(contains 'MARKER="~' "$SCRIPT")" "no"
+check_eq "render: dropin name no dot"      "$(contains 'DROPIN="/etc/sudoers.d/synology-manager-plus-docker"' "$SCRIPT")" "yes"
+check_eq "render: temp in sudoers.d"       "$(contains 'mktemp /etc/sudoers.d/.smp-XXXXXX' "$SCRIPT")" "yes"
+check_eq "render: conditional visudo"      "$(contains 'command -v visudo' "$SCRIPT")" "yes"
+check_eq "render: mode 0440"               "$(contains 'chmod 0440' "$SCRIPT")" "yes"
+check_eq "render: includedir check"        "$(contains 'includedir' "$SCRIPT")" "yes"
+check_eq "render: includedir allows quote" "$(contains 'includedir[[:space:]]+"?/etc/sudoers' "$SCRIPT")" "yes"
+check_eq "render: username sanitize"       "$(contains 'username unsafe for sudoers' "$SCRIPT")" "yes"
+check_eq "render: success marker rc=0"     "$(contains 'rc=0 stage=done' "$SCRIPT")" "yes"
+
 echo ""
 echo "=== test-sudo-lib: $pass_count pass, $fail_count fail ==="
 [ "$fail_count" -eq 0 ]
