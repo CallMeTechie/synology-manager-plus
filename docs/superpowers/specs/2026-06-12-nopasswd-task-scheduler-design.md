@@ -65,8 +65,10 @@ Drei Funktionen als Single Source of Truth:
   Ersetzt die fehlerhafte `sudo -n true`-Logik und wird von first-run,
   `/setup-docker-sudo` und (in Mirror-Form) vom compose-Precheck genutzt.
 
-- **`smp_render_sudoers_script`** — Parameter `username`, `docker_path`. Gibt das
-  visudo-validierte root-Skript auf stdout aus (siehe Abschnitt „Root-Skript").
+- **`smp_render_sudoers_script`** — Parameter `username`, `docker_path`, `home_path`.
+  Gibt das root-Skript auf stdout aus (siehe Abschnitt „Root-Skript"). `home_path`
+  wird für den absoluten Pfad des Result-Markers (und ggf. der Upload-Datei) benötigt —
+  niemals `~`, da das Skript als root läuft und `~` zu roots Home expandiert.
 
 - **`smp_user_is_admin_probe`** — liefert das SSH-Payload-Schnipsel
   `id -Gn 2>/dev/null | grep -qw administrators && echo admin || echo standard`,
@@ -92,6 +94,21 @@ Eigenständig, jederzeit ausführbar. `allowed-tools: Bash, Read, Write, Edit, A
   (sudoers ignoriert Dateien mit `.` im Namen).
 - `smp_docker_sudo_probe`: korrekte Klassifizierung gegen gemockte `docker info`-Ausgaben
   (ok / password-required / daemon-down / not-found / unknown).
+- `smp_render_sudoers_script`: Result-Marker-Pfad ist absolut (kein `~`); Skript prüft
+  `@includedir`/`#includedir`; Skript ist busybox-tauglich (kein `install`-Flag-Zwang).
+
+### Plattform-Annahmen (vor Implementierung auf echter DSM-Box verifizieren)
+
+DSM hat ein gemischtes Userland (teils BusyBox, teils GNU). Das root-Skript darf sich
+**nicht** auf GNU-spezifische Flags verlassen:
+
+- `visudo` ist möglicherweise nicht vorhanden → wenn `command -v visudo` leer ist,
+  Validierung überspringen und das im Result-Marker vermerken (`validated=no`). Die
+  generierte Zeile ist maschinell-simpel, das Restrisiko gering; fail-closed bleibt es,
+  weil ein kaputtes Drop-in die Post-Install-Probe sofort als `password-required` zeigt.
+- `install -o -g -m` wird **nicht** verwendet (BusyBox-`install` kann die Flags ggf.
+  nicht). Stattdessen `mktemp` → `printf` → `chown root:root` → `chmod 0440` → `mv -f`.
+- Vor der Umsetzung per SSH prüfen: `command -v visudo install mktemp chown chmod mv`.
 
 ## Flow: `/setup-docker-sudo`
 
@@ -116,49 +133,89 @@ Eigenständig, jederzeit ausführbar. `allowed-tools: Bash, Read, Write, Edit, A
    - *Vollskript einfügen* → Skript im Chat ausgeben **und** Kopie nach
      `context/nas/<slug>/setup-docker-sudo.sh` schreiben (Referenz). User fügt es 1:1 ins
      Skriptfeld der Aufgabe ein.
-   - *Upload + Einzeiler* → Skript per bestehender SSH ins **User-Home** laden (nicht
-     `/tmp` — reboot-fest); die Aufgabe ruft nur `bash ~/smp-setup-docker-sudo.sh`.
-     Cleanup-Hinweis ausgeben.
+   - *Upload + Einzeiler* → Skript per bestehender SSH ins **User-Home** laden (Home-Pfad
+     vorab via `echo "$HOME"` über SSH ermitteln); die Aufgabe ruft den **absoluten**
+     Pfad `bash <home_path>/smp-setup-docker-sudo.sh` — **niemals `~`** (expandiert im
+     root-Task zu roots Home, nicht zum User-Home). Vor Ausführung die hochgeladene Datei
+     auf `chmod 0700` setzen (TOCTOU-Fläche minimieren: ein als root ausgeführtes, für
+     andere schreibbares Skript ist eine Eskalations-Lücke). Cleanup-Hinweis ausgeben.
 8. **GUI-Schritte** (kopierfertig):
    > Systemsteuerung → Aufgabenplaner → Erstellen → Geplante Aufgabe →
    > Benutzerdefiniertes Skript. Benutzer: **root**. Reiter „Aufgabeneinstellungen" →
    > Skript einfügen. Speichern → Aufgabe markieren → **Ausführen** → bestätigen.
    > Danach kann die Aufgabe gelöscht werden.
-9. **Verifikation**: nach „fertig" Re-Probe mit Retry (3 Versuche, kurzer Abstand) via
-   `smp_docker_sudo_probe`:
-   - Erfolg → Profil `sudo_passwordless: yes` setzen (atomarer Edit), `render_claude_md`
-     neu rendern, Erfolg melden.
-   - Misserfolg → gezielte Diagnose anhand des Probe-Status:
-     - `password-required` → Username im Eintrag ≠ SSH-User? Task als falschem User
-       gelaufen (nicht root)? Drop-in-Name mit Punkt?
-     - `not-found` → Docker-Pfad anpassen.
-     - `daemon-down` → Container Manager nicht gestartet.
+9. **Verifikation**: nach „fertig" zuerst den **Result-Marker** über SSH lesen
+   (`<home_path>/smp-sudo-setup.result`), dann Re-Probe mit Retry (3 Versuche, kurzer
+   Abstand) via `smp_docker_sudo_probe`:
+   - Marker `rc=0` **und** Probe `ok` → Profil `sudo_passwordless: yes` setzen (atomarer
+     Edit), `render_claude_md` neu rendern, Erfolg melden.
+   - Marker `rc=1` → den echten Fehler aus `stage=`/`msg=` direkt anzeigen
+     (z. B. `stage=includedir`, `stage=visudo`) — kein Rätselraten.
+   - Kein Marker vorhanden → die Aufgabe wurde (noch) nicht ausgeführt **oder** nicht als
+     root angelegt. Das ist der häufigste Fall und wird **zuerst** genannt.
+   - Marker `rc=0`, aber Probe ≠ `ok` → Diagnose nach realer Häufigkeit:
+     1. Aufgabe wirklich als **root** ausgeführt (nicht als anderem User)?
+     2. `validated=no` im Marker → visudo fehlte, Syntax ungeprüft — Zeile sichten.
+     3. Username im Eintrag = SSH-User (`$USER_NAME` == Profil-`user`)?
+     4. `@#includedir /etc/sudoers.d` aktiv (Marker hätte sonst `stage=includedir`)?
+     5. `not-found` → Docker-Pfad anpassen; `daemon-down` → Container Manager starten.
 
 ## Root-Skript (Sicherheit)
 
+Läuft als root via Aufgabenplaner. Schreibt einen **Result-Marker**, den das Plugin
+über SSH liest — der Aufgabenplaner verwirft stdout/stderr, daher ist der Marker der
+einzige Weg, den echten Ausgang zu erfahren.
+
 ```sh
 #!/bin/sh
-set -e
+# synology-manager-plus: NOPASSWD nur für das docker-Binary.
 USER_NAME="<profile.user>"
 DOCKER_BIN="/usr/local/bin/docker"
 DROPIN="/etc/sudoers.d/synology-manager-plus-docker"   # kein '.' im Namen!
-TMP="$(mktemp)"
-printf '%s ALL=(ALL) NOPASSWD: %s\n' "$USER_NAME" "$DOCKER_BIN" > "$TMP"
-visudo -cf "$TMP"                                       # validieren VOR Aktivierung
-install -m 0440 -o root -g root "$TMP" "$DROPIN"
-rm -f "$TMP"
+MARKER="<profile.home_path>/smp-sudo-setup.result"     # absolut, reboot-fest, plugin-lesbar
+LINE="$USER_NAME ALL=(ALL) NOPASSWD: $DOCKER_BIN"
+
+fail() { echo "rc=1 stage=$1 msg=$2" > "$MARKER"; chmod 0644 "$MARKER" 2>/dev/null; exit 1; }
+
+# 0. sudoers.d muss von /etc/sudoers inkludiert sein, sonst ist das Drop-in ein No-Op.
+grep -Eq '^[@#]includedir[[:space:]]+/etc/sudoers\.d' /etc/sudoers \
+  || fail includedir "/etc/sudoers includes keine /etc/sudoers.d"
+
+# 1. Temp-Datei mit sicheren Rechten (umask/chmod statt install-Flags — busybox-tauglich).
+TMP="$(mktemp)" || fail mktemp "mktemp nicht verfuegbar"
+printf '%s\n' "$LINE" > "$TMP"
+
+# 2. Validieren VOR Aktivierung, falls visudo existiert; sonst Hinweis im Marker.
+if command -v visudo >/dev/null 2>&1; then
+  visudo -cf "$TMP" || { rm -f "$TMP"; fail visudo "Syntaxpruefung fehlgeschlagen"; }
+  VALIDATED=yes
+else
+  VALIDATED=no
+fi
+
+# 3. Atomar aktivieren mit korrektem Owner/Mode.
+chown root:root "$TMP" && chmod 0440 "$TMP" || { rm -f "$TMP"; fail perms "chown/chmod"; }
+mv -f "$TMP" "$DROPIN" || { rm -f "$TMP"; fail install "mv nach sudoers.d"; }
+
+echo "rc=0 stage=done validated=$VALIDATED user=$USER_NAME bin=$DOCKER_BIN" > "$MARKER"
+chmod 0644 "$MARKER" 2>/dev/null
 echo "OK: NOPASSWD fuer $USER_NAME -> $DOCKER_BIN aktiv."
 ```
 
 Sicherheits-Eigenschaften:
-- **`visudo -cf` vor Aktivierung** — ein Syntaxfehler in `sudoers.d` würde sonst das
-  gesamte sudo-System lahmlegen (Lockout-Schutz).
-- **`install -m 0440 -o root -g root`** atomar in einem Schritt — sudo ignoriert Drop-ins
-  mit falschem Mode/Owner.
-- **Drop-in-Name ohne Punkt** — `sudoers.d` ignoriert Dateien mit `.` im Namen.
+- **`@#includedir`-Check zuerst** — schlägt früh und sichtbar (im Marker) fehl, wenn das
+  Drop-in wirkungslos wäre, statt still zu scheitern.
+- **`visudo -cf` vor Aktivierung** (falls vorhanden) — ein Syntaxfehler in `sudoers.d`
+  würde sonst das gesamte sudo-System lahmlegen (Lockout-Schutz). Fehlt `visudo`, wird
+  `validated=no` im Marker vermerkt.
+- **busybox-tauglich** — `mktemp`/`chown`/`chmod`/`mv` statt `install -o -g -m`.
+- **Drop-in-Name ohne Punkt** — `sudoers.d` ignoriert Dateien mit `.` im Namen. Mode `0440`,
+  Owner `root:root` — sudo ignoriert Drop-ins mit falschem Mode/Owner.
+- **Result-Marker** (`rc=…`, `stage=…`, `validated=…`) — vom Plugin lesbar, Mode `0644`,
+  macht den als root laufenden Job diagnostizierbar (löst die Output-Blindheit).
 - **Username aus dem Profil eingesetzt** — Re-Run überschreibt deterministisch (idempotent).
 - **Scope = nur `/usr/local/bin/docker`** — minimal möglich; nicht enger, da compose/run/exec
-  alle benötigt werden.
+  alle benötigt werden (alle laufen als das eine Binary mit Argumenten).
 
 ## Bug-Fix: Probe-Semantik
 
@@ -170,13 +227,32 @@ funktioniert — das Profil würde fälschlich `sudo_passwordless: no` melden.
 `sudo_passwordless` wird daher umdefiniert auf **„passwortloses sudo für das docker-Binary"**
 (was jeder Consumer real braucht) und an `docker_available` gekoppelt:
 
+Eine Wahrheit: an `docker_available` koppeln. Ist Docker **nicht** installiert →
+`sudo_passwordless: n/a` (gar nicht erst proben). Sonst yes/no aus dem echten
+docker-Probe:
+
 ```bash
 # alt: SUDO_OK=$(discover sudo "sudo -n true 2>/dev/null && echo yes || echo no")
-# neu:
-SUDO_OK=$(discover sudo "[ -x /usr/local/bin/docker ] && sudo -n /usr/local/bin/docker info >/dev/null 2>&1 && echo yes || echo no")
+# neu (nur proben wenn Docker da ist, sonst n/a):
+if [ "$DOCKER_OK" = "not installed" ]; then
+  SUDO_OK="n/a"
+else
+  SUDO_OK=$(discover sudo "sudo -n /usr/local/bin/docker info >/dev/null 2>&1 && echo yes || echo no")
+fi
 ```
 
-Ist Docker nicht installiert, wird `n/a` gespeichert. Gleiche Änderung in `nas-add.md`.
+Gleiche Änderung in `nas-add.md`.
+
+**Das Profilfeld ist nur ein Cache.** Der Compose-Precheck probet ohnehin bei jedem Lauf
+live, daher fängt er ein nach DSM-Update gelöschtes Drop-in auf (Feld sagt noch `yes`,
+Realität `no`). Der Zeitstempel kommt in ein **separates** Feld, damit die bestehende
+`render_claude_md`-Extraktion (`awk -F': ' … print $2`) unverändert nur `yes`/`no`/`n/a`
+liest:
+
+```
+- sudo_passwordless: yes
+- sudo_checked_at: <ISO 8601 UTC>
+```
 
 ## Fehlerbehandlung & Edge-Cases
 
@@ -198,9 +274,22 @@ Ist Docker nicht installiert, wird `n/a` gespeichert. Gleiche Änderung in `nas-
 
 First-run **treibt den Flow inline** (Inline-Mirror der `_sudo-lib`-Funktionen plus
 GUI-/Liefer-/Verifikations-Schritte), statt an `/setup-docker-sudo` zu delegieren — damit
-der Erstlauf „ohne Rumdoktern" durchläuft (explizites User-Ziel). Gating: nur wenn
-`docker_available` ≠ not installed **und** Probe ≠ `ok`. Das eigenständige Command dient
-späteren Reparaturen. Beide betten denselben Inline-Mirror ein.
+der Erstlauf „ohne Rumdoktern" durchläuft (explizites User-Ziel). Das eigenständige
+Command dient späteren Reparaturen. Beide betten denselben Inline-Mirror ein.
+
+**Reihenfolge ist kritisch (Resumability).** Die interaktive GUI-Übergabe ist die
+langsamste, fragilste, user-abhängige Phase — der User wechselt minutenlang in die
+DSM-GUI. Sie darf **nicht** vor dem atomaren Profil-Write liegen, sonst gehen alle
+Discovery-Ergebnisse (in-memory) bei Abbruch verloren und der Wizard muss komplett neu
+laufen. Daher:
+
+1. Discovery (Step 5) → Profil **zuerst** atomar schreiben (Step 7) mit dem aktuellen
+   Probe-Ergebnis (`sudo_passwordless: no` + `sudo_checked_at`).
+2. **Danach** (neuer Step 8, vor der Summary) der Setup-Flow — gated auf
+   `docker_available` ≠ not installed **und** Probe ≠ `ok`. Bei Erfolg wird nur das eine
+   Feld `sudo_passwordless` auf `yes` aktualisiert (atomarer Edit) + `render_claude_md`.
+3. Bricht der User in der GUI-Phase ab, ist das Profil bereits vollständig und korrekt
+   (nur Docker-sudo noch offen); `/setup-docker-sudo` setzt später nahtlos fort.
 
 ## Betroffene Dateien (Zusammenfassung)
 
@@ -208,7 +297,7 @@ späteren Reparaturen. Beide betten denselben Inline-Mirror ein.
 | - | - |
 | `plugin/commands/_sudo-lib.sh` | **neu** — kanonische Lib (3 Funktionen) |
 | `plugin/commands/setup-docker-sudo.md` | **neu** — eigenständiges Command |
-| `plugin/commands/first-run.md` | Probe-Fix + inline Setup-Flow (Step ~5.5) |
+| `plugin/commands/first-run.md` | Probe-Fix; Profil-Schema um `sudo_checked_at`; inline Setup-Flow als **neuer Step 8** (nach atomarem Profil-Write, vor Summary) |
 | `plugin/commands/nas-add.md` | Probe-Fix + Angebot |
 | `plugin/commands/_compose-lib.sh` | stale `sudo tee`-Hinweis → Verweis auf Command |
 | `plugin/CLAUDE.md` | Command-Tabelle, Sudo-Zeilen-Semantik |
