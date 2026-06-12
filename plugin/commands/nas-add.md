@@ -90,7 +90,11 @@ DF_OUTPUT=$(discover df "df -h")
 RAID_STATUS=$(discover raid "cat /proc/mdstat | head -20 2>/dev/null || echo 'n/a'")
 VOL1_LIST=$(discover vol1 "ls /volume1/")
 DOCKER_OK=$(discover docker "[ -x /usr/local/bin/docker ] && /usr/local/bin/docker --version || echo 'not installed'")
-SUDO_OK=$(discover sudo "sudo -n true 2>/dev/null && echo yes || echo no")
+if [ "$DOCKER_OK" = "not installed" ]; then
+  SUDO_OK="n/a"
+else
+  SUDO_OK=$(discover sudo "sudo -n /usr/local/bin/docker info >/dev/null 2>&1 && echo yes || echo no")
+fi
 
 for var in DSM_VERSION HOSTNAME_VAL ARCH MODEL VOL1_LIST; do
   if [ -z "${!var}" ]; then
@@ -129,6 +133,7 @@ _Populated by /nas-add on ${TS}._
 - hostname: $HOSTNAME_VAL
 - docker_available: $DOCKER_OK
 - sudo_passwordless: $SUDO_OK
+- sudo_checked_at: $TS
 - critical_compose_projects:
 
 ## Last Updated
@@ -212,6 +217,14 @@ render_claude_md "$SLUG" || echo "(warning) NAS added and set active, but CLAUDE
 ```
 
 If **No**, leave the active NAS unchanged.
+
+```bash
+if [ "$DOCKER_OK" != "not installed" ] && [ "$SUDO_OK" != "yes" ]; then
+  echo "Docker is installed on '$SLUG' but passwordless docker-sudo is not set up."
+  echo "Run /setup-docker-sudo to configure it (it operates on the active NAS —"
+  echo "switch first with: /nas-use $SLUG)."
+fi
+```
 
 ## 6. Summary
 
